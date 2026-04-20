@@ -159,7 +159,13 @@ async function showFor(term) {
   const slug = term.getAttribute("data-glossary-term");
   if (!slug) return;
   const data = await loadData();
-  const entry = data[slug];
+  // Follow mergedInto pointers so old-slug tooltips render canonical content.
+  let entry = data[slug];
+  const seen = new Set([slug]);
+  while (entry && entry.mergedInto && !seen.has(entry.mergedInto)) {
+    seen.add(entry.mergedInto);
+    entry = data[entry.mergedInto];
+  }
   const pop = ensurePopover();
   const termEl = pop.querySelector(".sl-glossary-popover__term");
   const taglineEl = pop.querySelector(".sl-glossary-popover__tagline");

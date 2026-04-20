@@ -18,6 +18,7 @@ import {
   fillCacheHoles,
   type UnresolvedReference,
 } from "./discovery.js";
+import { reconcileWikipediaRedirects } from "./reconcile.js";
 import { remarkAutoTag, type AutoTagMode } from "./autotag.js";
 import { createLintCollector, renderLintReport } from "./lint.js";
 import { writeJsonAtomic } from "./persist.js";
@@ -244,23 +245,63 @@ export default function starlightGlossary(
               // tooltip data.json) happen after this returns — if the cache
               // was empty at this point, the serialised data would be empty
               // too and nothing short of a restart would fix it.
+              let shouldPersist = normalised;
               if (discoveryEnabled) {
                 const filled = await fillCacheHoles(
                   indexRef,
                   cacheRef,
                   logger,
                 );
-                if (filled > 0 || normalised) {
-                  cacheRef.fetchedAt = new Date().toISOString();
-                  await writeJsonAtomic(indexPath, indexRef);
-                  await writeJsonAtomic(cachePath, cacheRef);
+                if (filled > 0) shouldPersist = true;
+              }
+
+              // Now that cache is populated, reconcile Wikipedia redirects.
+              // Conservative: only adopt canonical names that are case-only
+              // or prefix-related to the user's term, and only merge when
+              // another entry clearly owns the same article.
+              const { report, mutated: reconciled } =
+                reconcileWikipediaRedirects(indexRef, cacheRef);
+              for (const r of report.merged) {
+                logger.info(
+                  `merged "${r.fromTerm}" (${r.from}) into "${r.intoTerm}" (${r.into}) — Wikipedia redirect`,
+                );
+              }
+              for (const r of report.renamed) {
+                logger.info(
+                  `adopted Wikipedia canonical name "${r.newTerm}" for slug "${r.slug}" (was "${r.oldTerm}")`,
+                );
+              }
+              if (report.skipped.length > 0) {
+                logger.info(
+                  `${report.skipped.length} entries have Wikipedia redirects with substantial title changes — review glossary.json if you want to update them:`,
+                );
+                for (const s of report.skipped.slice(0, 10)) {
+                  logger.info(
+                    `  · "${s.term}" (${s.slug}) → Wikipedia: "${s.cachedTitle}"`,
+                  );
                 }
-              } else if (normalised) {
+                if (report.skipped.length > 10) {
+                  logger.info(
+                    `  … and ${report.skipped.length - 10} more`,
+                  );
+                }
+              }
+              if (reconciled) shouldPersist = true;
+
+              if (shouldPersist) {
+                cacheRef.fetchedAt = new Date().toISOString();
                 await writeJsonAtomic(indexPath, indexRef);
+                await writeJsonAtomic(cachePath, cacheRef);
               }
 
               const data = joinGlossary(indexRef, cacheRef, context);
               const knownSlugs = new Set(Object.keys(data.terms));
+              // Map of merged-out slug → canonical slug, so remark can
+              // forward doc links that still point at the old slug.
+              const redirects = new Map<string, string>();
+              for (const [slug, e] of Object.entries(indexRef.terms)) {
+                if (e.mergedInto) redirects.set(slug, e.mergedInto);
+              }
 
               const onReference = (ref: GlossaryReference) => {
                 references.push(ref);
@@ -303,7 +344,7 @@ export default function starlightGlossary(
                     ...existing,
                     [
                       remarkGlossary,
-                      { routePrefix, knownSlugs, onReference },
+                      { routePrefix, knownSlugs, redirects, onReference },
                     ],
                     [
                       remarkAutoTag,

@@ -18,6 +18,11 @@ export interface GlossaryEntry {
   /** When set, this entry appears under another entry on the /glossary page
    *  instead of having its own heading. */
   groupWith: string | null;
+  /** When set, this entry has been merged into another entry (Wikipedia
+   *  redirect resolved to a different slug). Doc links to this slug still
+   *  resolve — they're forwarded to the target entry at render time. The
+   *  target owns all aliases, cached content, etc. */
+  mergedInto?: string | null;
 }
 
 export interface GlossaryIndex {
@@ -74,6 +79,10 @@ export function joinGlossary(
     const cached = cache.terms[slug] ?? null;
     terms[slug] = { slug, ...entry, cached };
 
+    // Merged entries forward to their target — don't index aliases here;
+    // the target owns the alias list.
+    if (entry.mergedInto) continue;
+
     for (const alias of entry.aliases) {
       const key = entry.caseSensitive ? alias : alias.toLowerCase();
       if (!aliasIndex.has(key)) aliasIndex.set(key, slug);
@@ -81,4 +90,22 @@ export function joinGlossary(
   }
 
   return { terms, aliasIndex, context };
+}
+
+/** Follow `mergedInto` forwards until reaching a canonical entry. Returns
+ *  the canonical slug (or the input if nothing's merged). Guards against
+ *  cycles / broken chains. */
+export function resolveSlug(
+  slug: string,
+  terms: Record<string, { mergedInto?: string | null }>,
+): string {
+  let current = slug;
+  const seen = new Set<string>([current]);
+  while (true) {
+    const entry = terms[current];
+    if (!entry || !entry.mergedInto) return current;
+    if (seen.has(entry.mergedInto)) return current;
+    seen.add(entry.mergedInto);
+    current = entry.mergedInto;
+  }
 }

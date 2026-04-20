@@ -20,10 +20,12 @@ const displayTerm = (e: typeof terms[string]): string => {
 };
 
 // Sort & group alphabetically. Children (entries with `groupWith`) nest
-// under their parent rather than getting their own A–Z slot.
-const allEntries = Object.values(terms).sort((a, b) =>
-  displayTerm(a).localeCompare(displayTerm(b)),
-);
+// under their parent rather than getting their own A–Z slot. Merged
+// entries are skipped entirely — their aliases + content are owned by
+// the canonical target.
+const allEntries = Object.values(terms)
+  .filter((e) => !e.mergedInto)
+  .sort((a, b) => displayTerm(a).localeCompare(displayTerm(b)));
 const parents = allEntries.filter((e) => !e.groupWith);
 const kidsByParent = new Map<string, typeof allEntries>();
 for (const e of allEntries) {

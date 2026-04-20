@@ -24,10 +24,21 @@ export const GET: APIRoute = async () => {
       wikipedia?: string;
       wikipediaUrl?: string;
       wikipediaTitle?: string;
+      mergedInto?: string;
     }
   > = {};
 
   for (const entry of Object.values(terms)) {
+    // Merged entries: emit a tiny redirect record so the tooltip client
+    // can follow the pointer client-side.
+    if (entry.mergedInto) {
+      out[entry.slug] = {
+        term: entry.term,
+        html: "",
+        mergedInto: entry.mergedInto,
+      } as (typeof out)[string];
+      continue;
+    }
     const html =
       entry.definition != null
         ? `<p>${entry.definition}</p>`

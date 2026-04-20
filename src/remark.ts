@@ -19,6 +19,10 @@ export interface RemarkGlossaryOptions {
    *  references that can be rendered immediately from ones that need to
    *  go through discovery. */
   knownSlugs?: Set<string>;
+  /** Map of old-slug → canonical-slug for entries that have been merged
+   *  into another entry (Wikipedia redirects). Forwarding happens at
+   *  render time so doc links to the old slug still resolve correctly. */
+  redirects?: Map<string, string>;
   /** Called for every glossary reference found in the source. The caller
    *  collects these to (a) record alias candidates, (b) kick off Wikipedia
    *  discovery for unknown slugs. */
@@ -48,8 +52,22 @@ export interface RemarkGlossaryOptions {
 export default function remarkGlossary(options: RemarkGlossaryOptions = {}) {
   const routePrefix = options.routePrefix ?? "/glossary";
   const known = options.knownSlugs;
+  const redirects = options.redirects;
   const onReference = options.onReference;
   const slugify = options.slugify ?? defaultSlugify;
+
+  const resolve = (slug: string): string => {
+    if (!redirects) return slug;
+    const seen = new Set<string>([slug]);
+    let current = slug;
+    while (redirects.has(current)) {
+      const next = redirects.get(current) as string;
+      if (seen.has(next)) break;
+      seen.add(next);
+      current = next;
+    }
+    return current;
+  };
 
   return function transformer(tree: unknown) {
     visit(tree as Parameters<typeof visit>[0], "link", (node: unknown) => {
@@ -73,8 +91,9 @@ export default function remarkGlossary(options: RemarkGlossaryOptions = {}) {
       const label = toString(n as Parameters<typeof toString>[0]).trim();
       if (!label) return;
 
-      const slug = explicitSlug ?? slugify(label);
-      if (!slug) return;
+      const rawSlug = explicitSlug ?? slugify(label);
+      if (!rawSlug) return;
+      const slug = resolve(rawSlug);
 
       if (onReference) {
         onReference({ slug, label, slugFromLabel: explicitSlug === null });
