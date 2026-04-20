@@ -120,16 +120,16 @@ export default function remarkGlossary(options: RemarkGlossaryOptions = {}) {
             // Known glossary slug — use directly. Fragment (if any) is
             // per-reference metadata on top of the existing entry.
             explicitSlug = head;
-          } else if (looksLikeWikipediaArticle(head) || tail) {
-            // Wikipedia-article form (capitals/underscores/parens/
-            // fragment): use as Wikipedia query; slugify for the entry.
-            article = head;
-            explicitSlug = slugify(head);
           } else {
-            // Plain slug form for a slug we haven't seen yet. Create a
-            // new entry under this slug; Wikipedia query will fall back
-            // to the link label.
-            explicitSlug = head;
+            // Unknown slug: treat the URL tail as the author's
+            // Wikipedia-article hint for discovery. Slugify when it's in
+            // PascalCase/underscore form so the stored entry still has
+            // a clean kebab-case slug; otherwise use the tail as-is as
+            // both slug and Wikipedia query.
+            article = head;
+            explicitSlug = looksLikeWikipediaArticle(head)
+              ? slugify(head)
+              : head;
           }
         }
       } else {
