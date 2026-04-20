@@ -23,6 +23,12 @@ export interface GlossaryEntry {
    *  resolve — they're forwarded to the target entry at render time. The
    *  target owns all aliases, cached content, etc. */
   mergedInto?: string | null;
+  /** Map of alias → Wikipedia fragment. Populated when docs reference the
+   *  entry with `glossary:Article#Section` syntax: the label becomes an
+   *  alias, the fragment is stored here. Subsequent references to that
+   *  alias (explicit or auto-tagged) get the fragment carried through to
+   *  the Wikipedia link. Not usually hand-edited. */
+  aliasFragments?: Record<string, string>;
 }
 
 export interface GlossaryIndex {
@@ -51,6 +57,8 @@ export interface RuntimeGlossaryEntry {
   caseSensitive: boolean;
   definition: string | null;
   groupWith: string | null;
+  mergedInto?: string | null;
+  aliasFragments?: Record<string, string>;
   cached: GlossaryCacheEntry | null;
 }
 

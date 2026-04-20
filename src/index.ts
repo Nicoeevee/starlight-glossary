@@ -157,6 +157,16 @@ export default function starlightGlossary(
                 });
               }
             }
+            // Gather article + fragment hints for each missing slug.
+            for (const ref of references) {
+              const m = missing.get(ref.slug);
+              if (!m) continue;
+              if (ref.article && !m.article) m.article = ref.article;
+              if (ref.fragment && ref.label) {
+                m.fragmentsByLabel = m.fragmentsByLabel ?? {};
+                m.fragmentsByLabel[ref.label] = ref.fragment;
+              }
+            }
             if (missing.size > 0) {
               logger.info(
                 `discovering ${missing.size} new term(s) via Wikipedia…`,
@@ -343,6 +353,18 @@ export default function starlightGlossary(
                     dedupe.add(ref.label);
                     knownAliasCandidates.set(ref.slug, dedupe);
                     isNew = true;
+                  }
+                }
+                // Record alias → fragment mapping whenever a reference
+                // explicitly used the `glossary:Article#Section` syntax.
+                if (ref.fragment && ref.label) {
+                  const entry = indexRef.terms[ref.slug];
+                  if (entry && !entry.mergedInto) {
+                    entry.aliasFragments ??= {};
+                    if (entry.aliasFragments[ref.label] !== ref.fragment) {
+                      entry.aliasFragments[ref.label] = ref.fragment;
+                      isNew = true;
+                    }
                   }
                 }
                 if (isNew) scheduleDevFinalize();

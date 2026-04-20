@@ -17,8 +17,16 @@ export interface UnresolvedReference {
   slug: string;
   /** Best label we saw for this slug across all references. */
   label: string;
+  /** If any reference explicitly specified the Wikipedia article
+   *  (`glossary:Article#Section` syntax), use it for the Wikipedia query
+   *  instead of the label — gives much better discovery results for
+   *  ambiguous labels like "SPF" or "A record". */
+  article?: string;
   /** Locations (file:line) where the reference was seen, for logs. */
   locations: string[];
+  /** Fragments seen on references to this slug, keyed by label that
+   *  carried them. These become `aliasFragments` on the new entry. */
+  fragmentsByLabel?: Record<string, string>;
 }
 
 export interface DiscoveryReport {
@@ -42,8 +50,10 @@ export async function discoverMissingTerms(
   };
 
   for (const ref of unresolved) {
-    // Use the label as the Wikipedia query — it's the author's natural form.
-    const { summary, errorReason } = await fetchWikipedia(ref.label);
+    // Prefer the explicit Wikipedia article from the reference URL when
+    // provided (glossary:Article#Section syntax). Fall back to the label.
+    const query = ref.article || ref.label;
+    const { summary, errorReason } = await fetchWikipedia(query);
     if (!summary) {
       report.errored.push(ref.slug);
       logger.warn(
@@ -81,6 +91,9 @@ export async function discoverMissingTerms(
       caseSensitive: looksCaseSensitive(ref.label || ref.slug),
       definition: null,
       groupWith: null,
+      ...(ref.fragmentsByLabel && Object.keys(ref.fragmentsByLabel).length > 0
+        ? { aliasFragments: { ...ref.fragmentsByLabel } }
+        : {}),
     };
     cache.terms[ref.slug] = {
       title: summary.title,

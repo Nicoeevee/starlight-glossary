@@ -25,6 +25,11 @@ export const GET: APIRoute = async () => {
       wikipediaUrl?: string;
       wikipediaTitle?: string;
       mergedInto?: string;
+      /** Per-alias fragment overrides — tooltip client consults this when
+       *  a link has no data-glossary-fragment attribute (e.g. when the
+       *  reference was auto-tagged from plain text without explicit
+       *  fragment syntax). */
+      aliasFragments?: Record<string, string>;
     }
   > = {};
 
@@ -62,6 +67,10 @@ export const GET: APIRoute = async () => {
       wikipediaTitle: entry.wikipedia
         ? prettifyWikipediaTitle(entry.wikipedia)
         : undefined,
+      aliasFragments:
+        entry.aliasFragments && Object.keys(entry.aliasFragments).length > 0
+          ? entry.aliasFragments
+          : undefined,
     };
   }
 

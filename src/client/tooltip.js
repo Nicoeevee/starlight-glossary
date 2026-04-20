@@ -166,6 +166,22 @@ async function showFor(term) {
     seen.add(entry.mergedInto);
     entry = data[entry.mergedInto];
   }
+  // Resolve per-reference Wikipedia fragment: prefer the explicit
+  // data-glossary-fragment attribute (set for links with the
+  // Article#Section syntax), then fall back to the entry's
+  // aliasFragments map keyed by the link's label text.
+  let explicitFragment = term.getAttribute("data-glossary-fragment");
+  if (!explicitFragment && entry?.aliasFragments) {
+    const labelText = term.textContent.trim();
+    if (labelText in entry.aliasFragments) {
+      explicitFragment = entry.aliasFragments[labelText];
+    } else {
+      const lower = labelText.toLowerCase();
+      for (const [k, v] of Object.entries(entry.aliasFragments)) {
+        if (k.toLowerCase() === lower) { explicitFragment = v; break; }
+      }
+    }
+  }
   const pop = ensurePopover();
   const termEl = pop.querySelector(".sl-glossary-popover__term");
   const taglineEl = pop.querySelector(".sl-glossary-popover__tagline");
@@ -179,11 +195,24 @@ async function showFor(term) {
     taglineEl.style.display = entry.description ? "" : "none";
     bodyEl.innerHTML = entry.html;
     const parts = [`<a href="/glossary#${encodeURIComponent(slug)}">Read more →</a>`];
-    if (entry.wikipediaUrl) {
-      // Server-built URL: already includes any fragment and correct encoding.
-      const title = entry.wikipediaTitle || "Wikipedia";
+    // If this specific reference carries a fragment, build a fragment-
+    // aware Wikipedia URL on top of the entry's article URL; otherwise
+    // use the entry's own URL (which may already be a fragment).
+    let wpUrl = entry.wikipediaUrl;
+    let wpTitle = entry.wikipediaTitle;
+    if (explicitFragment && entry.wikipedia) {
+      const articleOnly = entry.wikipedia.split("#")[0];
+      wpUrl =
+        "https://en.wikipedia.org/wiki/" +
+        articleOnly.replace(/ /g, "_") +
+        "#" +
+        explicitFragment.replace(/ /g, "_");
+      wpTitle = prettifyTerm(articleOnly) + " › " + prettifyTerm(explicitFragment);
+    }
+    if (wpUrl) {
+      const title = wpTitle || "Wikipedia";
       parts.push(
-        `<a href="${entry.wikipediaUrl}" target="_blank" rel="noreferrer">${escapeHtml(title)}</a>`,
+        `<a href="${wpUrl}" target="_blank" rel="noreferrer">${escapeHtml(title)}</a>`,
       );
     }
     footerEl.innerHTML = parts.join(" · ");

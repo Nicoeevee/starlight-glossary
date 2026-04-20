@@ -111,8 +111,6 @@ const headings = sections.map((s) => ({
                       : `#${kid.slug}`;
                     return (
                       <>
-                        {/* Invisible anchor so doc links to the child slug
-                             scroll to this entry. */}
                         <span id={kid.slug} class="sr-only" aria-hidden="true" />
                         <a href={href} target="_blank" rel="noreferrer">
                           {kidDisplay}
@@ -123,6 +121,32 @@ const headings = sections.map((s) => ({
                   })}
                 </p>
               )}
+              {entry.aliasFragments &&
+                Object.keys(entry.aliasFragments).length > 0 &&
+                entry.wikipedia && (() => {
+                  const article = entry.wikipedia!.split("#")[0];
+                  const entries = Object.entries(entry.aliasFragments!);
+                  return (
+                    <p class="sl-glossary-entry__variants">
+                      <em>Sub-sections:</em>{" "}
+                      {entries.map(([label, frag], i) => (
+                        <>
+                          <a
+                            href={buildWikipediaUrl(
+                              context.wikipediaBase,
+                              `${article}#${frag}`,
+                            )}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {label}
+                          </a>
+                          {i < entries.length - 1 && <span> · </span>}
+                        </>
+                      ))}
+                    </p>
+                  );
+                })()}
               {entry.wikipedia && (
                 <p class="sl-glossary-entry__wikipedia">
                   <a

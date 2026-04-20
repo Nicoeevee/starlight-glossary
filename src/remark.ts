@@ -8,6 +8,15 @@ export interface GlossaryReference {
   label: string;
   /** True when the slug came from the link body (no explicit slug). */
   slugFromLabel: boolean;
+  /** Wikipedia article name as it appeared in the URL (pre-slugify), so
+   *  the discovery pipeline can query Wikipedia for the correct page.
+   *  Empty when the reference had no explicit article part. */
+  article?: string;
+  /** Wikipedia-section fragment from the URL, if present
+   *  (`glossary:Article#Section`). Attached to the anchor's
+   *  `data-glossary-fragment` attribute and later used as an override on
+   *  the tooltip's Wikipedia link. */
+  fragment?: string;
 }
 
 export interface RemarkGlossaryOptions {
@@ -77,15 +86,39 @@ export default function remarkGlossary(options: RemarkGlossaryOptions = {}) {
       };
       const url = n.url ?? "";
 
-      // Parse the link target. Accept three spellings.
+      // Parse the link target. Accept:
+      //   glossary            — derive slug from label, no article hint
+      //   glossary:           — same
+      //   glossary:slug       — glossary slug, no article hint
+      //   glossary:Article    — treat article name as the Wikipedia hint
+      //   glossary:Article#Section  — article + fragment
+      // When the URL tail looks like a Wikipedia article (contains an
+      // uppercase letter or underscore), we slugify it for the entry slug
+      // and keep the original as `article` for Wikipedia discovery.
+      // Otherwise it's a literal slug reference.
       let explicitSlug: string | null = null;
+      let article: string | null = null;
+      let fragment: string | null = null;
       if (url === "glossary" || url === "glossary:") {
-        explicitSlug = null; // derive from label
+        // label-only reference
       } else if (url.startsWith("glossary:")) {
         const after = url.slice("glossary:".length).trim();
-        explicitSlug = after.length > 0 ? after : null;
+        if (after.length === 0) {
+          // label-only reference
+        } else {
+          const hashIdx = after.indexOf("#");
+          const head = hashIdx >= 0 ? after.slice(0, hashIdx) : after;
+          const tail = hashIdx >= 0 ? after.slice(hashIdx + 1) : "";
+          if (tail) fragment = tail;
+          if (looksLikeWikipediaArticle(head)) {
+            article = head;
+            explicitSlug = slugify(head);
+          } else {
+            explicitSlug = head;
+          }
+        }
       } else {
-        return; // not a glossary link, leave alone
+        return; // not a glossary link
       }
 
       const label = toString(n as Parameters<typeof toString>[0]).trim();
@@ -96,12 +129,18 @@ export default function remarkGlossary(options: RemarkGlossaryOptions = {}) {
       const slug = resolve(rawSlug);
 
       if (onReference) {
-        onReference({ slug, label, slugFromLabel: explicitSlug === null });
+        onReference({
+          slug,
+          label,
+          slugFromLabel: explicitSlug === null,
+          article: article ?? undefined,
+          fragment: fragment ?? undefined,
+        });
       }
 
       n.url = `${routePrefix}#${slug}`;
       n.data = n.data || {};
-      n.data.hProperties = {
+      const hProps: Record<string, unknown> = {
         ...(n.data.hProperties || {}),
         "data-glossary-term": slug,
         class:
@@ -109,6 +148,8 @@ export default function remarkGlossary(options: RemarkGlossaryOptions = {}) {
             ? "sl-glossary-term sl-glossary-term--pending"
             : "sl-glossary-term",
       };
+      if (fragment) hProps["data-glossary-fragment"] = fragment;
+      n.data.hProperties = hProps;
     });
   };
 }
@@ -121,4 +162,12 @@ export function defaultSlugify(input: string): string {
     .replace(/[\u0300-\u036f]/g, "") // strip accents
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+/** Heuristic: a URL tail looks like a Wikipedia article title when it
+ *  contains an uppercase letter (Wikipedia's PascalCase convention) or
+ *  an underscore (their space-replacement), or a parenthesis. Pure
+ *  lowercase-with-hyphens strings are treated as glossary slugs. */
+function looksLikeWikipediaArticle(s: string): boolean {
+  return /[A-Z_()]/.test(s);
 }

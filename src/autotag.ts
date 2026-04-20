@@ -25,12 +25,18 @@ export function buildMatcher(data: GlossaryData): {
   caseInsensitiveRe: RegExp | null;
   aliasToSlug: Map<string, string>;
   aliasToSlugCi: Map<string, string>;
+  /** Per-alias Wikipedia fragment (e.g. "TLS 1.3" → "TLS_1.3"). Looked up
+   *  when emitting the auto-tag anchor so subsequent text mentions get the
+   *  same sub-section link as explicit references. */
+  aliasFragment: Map<string, string>;
 } {
   const aliasToSlug = new Map<string, string>();
   const aliasToSlugCi = new Map<string, string>();
+  const aliasFragment = new Map<string, string>();
   const cs: string[] = [];
   const ci: string[] = [];
   for (const entry of Object.values(data.terms)) {
+    if (entry.mergedInto) continue;
     for (const alias of entry.aliases) {
       if (entry.caseSensitive) {
         aliasToSlug.set(alias, entry.slug);
@@ -38,6 +44,16 @@ export function buildMatcher(data: GlossaryData): {
       } else {
         aliasToSlugCi.set(alias.toLowerCase(), entry.slug);
         ci.push(escapeRegex(alias));
+      }
+    }
+    if (entry.aliasFragments) {
+      for (const [alias, frag] of Object.entries(entry.aliasFragments)) {
+        aliasFragment.set(alias, frag);
+        // Also index the lowercased form so case-insensitive matches can
+        // find their fragment.
+        if (!entry.caseSensitive) {
+          aliasFragment.set(alias.toLowerCase(), frag);
+        }
       }
     }
   }
@@ -48,7 +64,13 @@ export function buildMatcher(data: GlossaryData): {
 
   const csRe = cs.length ? new RegExp(`\\b(?:${cs.join("|")})\\b`, "g") : null;
   const ciRe = ci.length ? new RegExp(`\\b(?:${ci.join("|")})\\b`, "gi") : null;
-  return { caseSensitiveRe: csRe, caseInsensitiveRe: ciRe, aliasToSlug, aliasToSlugCi };
+  return {
+    caseSensitiveRe: csRe,
+    caseInsensitiveRe: ciRe,
+    aliasToSlug,
+    aliasToSlugCi,
+    aliasFragment,
+  };
 }
 
 interface AutoTagContext {
@@ -81,6 +103,7 @@ interface Match {
   start: number;
   end: number;
   slug: string;
+  fragment?: string;
 }
 
 // Allow-list of parent node types where it's safe to tag text. Narrow on
@@ -134,9 +157,12 @@ export function remarkAutoTag(opts: AutoTagOptions) {
             chunks.push(escapeHtml(text.slice(cursor, m.start)));
           }
           const displayed = text.slice(m.start, m.end);
+          const fragAttr = m.fragment
+            ? ` data-glossary-fragment="${escapeAttr(m.fragment)}"`
+            : "";
           chunks.push(
             `<a href="${ctx.routePrefix}#${escapeAttr(m.slug)}" ` +
-              `data-glossary-term="${escapeAttr(m.slug)}" ` +
+              `data-glossary-term="${escapeAttr(m.slug)}"${fragAttr} ` +
               `class="sl-glossary-term sl-glossary-term--auto">${escapeHtml(displayed)}</a>`,
           );
           cursor = m.end;
@@ -171,6 +197,7 @@ function findMatches(text: string, ctx: AutoTagContext): Match[] {
   const { caseSensitiveRe, caseInsensitiveRe, aliasToSlug, aliasToSlugCi } =
     ctx.matcher;
 
+  const aliasFragment = ctx.matcher.aliasFragment;
   if (caseSensitiveRe) {
     caseSensitiveRe.lastIndex = 0;
     let m: RegExpExecArray | null;
@@ -178,7 +205,13 @@ function findMatches(text: string, ctx: AutoTagContext): Match[] {
       const slug = aliasToSlug.get(m[0]);
       if (!slug) continue;
       if (ctx.mode === "first" && ctx.tagged.has(slug)) continue;
-      matches.push({ start: m.index, end: m.index + m[0].length, slug });
+      const fragment = aliasFragment.get(m[0]);
+      matches.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        slug,
+        fragment,
+      });
     }
   }
   if (caseInsensitiveRe) {
@@ -187,7 +220,6 @@ function findMatches(text: string, ctx: AutoTagContext): Match[] {
     while ((m = caseInsensitiveRe.exec(text)) !== null) {
       const slug = aliasToSlugCi.get(m[0].toLowerCase());
       if (!slug) continue;
-      // Skip if a case-sensitive match already covers this span.
       if (
         matches.some(
           (x) => x.start < m!.index + m![0].length && x.end > m!.index,
@@ -196,7 +228,14 @@ function findMatches(text: string, ctx: AutoTagContext): Match[] {
         continue;
       }
       if (ctx.mode === "first" && ctx.tagged.has(slug)) continue;
-      matches.push({ start: m.index, end: m.index + m[0].length, slug });
+      const fragment =
+        aliasFragment.get(m[0]) ?? aliasFragment.get(m[0].toLowerCase());
+      matches.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        slug,
+        fragment,
+      });
     }
   }
 
