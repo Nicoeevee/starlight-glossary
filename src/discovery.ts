@@ -1,5 +1,5 @@
 import type { GlossaryCache, GlossaryIndex } from "./data.js";
-import { fetchWikipedia } from "./wikipedia.js";
+import { fetchWikipedia, fetchManyWikipedia } from "./wikipedia.js";
 
 // Discovery pipeline — turns unknown slug references into glossary entries.
 // For each unknown slug, ask Wikipedia with the label (or slug turned back
@@ -43,11 +43,11 @@ export async function discoverMissingTerms(
 
   for (const ref of unresolved) {
     // Use the label as the Wikipedia query — it's the author's natural form.
-    const summary = await fetchWikipedia(ref.label);
+    const { summary, errorReason } = await fetchWikipedia(ref.label);
     if (!summary) {
       report.errored.push(ref.slug);
       logger.warn(
-        `glossary discovery: network error fetching "${ref.label}" (slug ${ref.slug})`,
+        `glossary discovery: ${errorReason ?? "unknown error"} fetching "${ref.label}" (slug ${ref.slug})`,
       );
       continue;
     }
@@ -101,4 +101,76 @@ export async function discoverMissingTerms(
  *  treat as case-sensitive to avoid bad auto-tag matches ("IP" vs "ip"). */
 function looksCaseSensitive(label: string): boolean {
   return /^[A-Z0-9]{2,6}$/.test(label);
+}
+
+/**
+ * Fill cache holes — fetch Wikipedia summaries for any index entry that
+ * has a `wikipedia` slug but no cached data yet (e.g. after the cache file
+ * was deleted, or a new entry was hand-added to glossary.json).
+ *
+ * Fragments (`Article#Section`) are fetched at the article level since
+ * Wikipedia's summary API doesn't surface sub-sections; the URL and title
+ * displayed to users still honour the fragment via the URL helpers.
+ */
+export async function fillCacheHoles(
+  index: GlossaryIndex,
+  cache: GlossaryCache,
+  logger: { info: (m: string) => void; warn: (m: string) => void },
+): Promise<number> {
+  const articleTitles: string[] = [];
+  const slugsByArticle = new Map<string, string[]>();
+
+  for (const [slug, entry] of Object.entries(index.terms)) {
+    if (!entry.wikipedia) continue;
+    if (cache.terms[slug]) continue;
+    const article = entry.wikipedia.split("#")[0] as string;
+    articleTitles.push(article);
+    const bucket = slugsByArticle.get(article) ?? [];
+    bucket.push(slug);
+    slugsByArticle.set(article, bucket);
+  }
+
+  if (articleTitles.length === 0) return 0;
+  logger.info(
+    `fetching Wikipedia summaries for ${articleTitles.length} known term(s) without cached data…`,
+  );
+
+  const uniqueTitles = Array.from(new Set(articleTitles));
+  const results = await fetchManyWikipedia(uniqueTitles);
+
+  let filled = 0;
+  let errored = 0;
+  let missing = 0;
+  for (const [article, { summary, errorReason }] of results) {
+    const slugs = slugsByArticle.get(article) ?? [];
+    if (!summary) {
+      errored++;
+      logger.warn(
+        `  fetch failed for "${article}": ${errorReason ?? "unknown error"} (slugs: ${slugs.join(", ")})`,
+      );
+      continue;
+    }
+    if (summary.missing) {
+      missing++;
+      logger.warn(
+        `  no Wikipedia article for "${article}" (slugs: ${slugs.join(", ")})`,
+      );
+      continue;
+    }
+    for (const slug of slugs) {
+      cache.terms[slug] = {
+        title: summary.title,
+        description: summary.description,
+        extract_html: summary.extract_html,
+        url: summary.url,
+      };
+      filled++;
+    }
+  }
+  if (errored > 0 || missing > 0) {
+    logger.info(
+      `  cached ${filled} / ${results.size}; ${errored} error(s), ${missing} missing`,
+    );
+  }
+  return filled;
 }

@@ -15,6 +15,7 @@ import {
 } from "./data.js";
 import {
   discoverMissingTerms,
+  fillCacheHoles,
   type UnresolvedReference,
 } from "./discovery.js";
 import { remarkAutoTag, type AutoTagMode } from "./autotag.js";
@@ -81,6 +82,11 @@ export default function starlightGlossary(
         let indexRef!: GlossaryIndex;
         let cacheRef!: GlossaryCache;
         let lintCollector: ReturnType<typeof createLintCollector> | null = null;
+        // Dev-mode bookkeeping so the periodic finalize timer only does work
+        // when new references have been collected since the last run.
+        let lastFinalizeRefCount = 0;
+        let finalizing = false;
+        let devTimer: ReturnType<typeof setInterval> | null = null;
 
         const finalize = async () => {
           let mutated = false;
@@ -101,7 +107,10 @@ export default function starlightGlossary(
             }
           }
 
-          // Discover missing slugs via Wikipedia.
+          // Discover missing slugs via Wikipedia — either entries that
+          // aren't in the index at all (new references in docs), or
+          // entries that exist in the index but have no cached summary
+          // (e.g. after the cache file was deleted).
           if (discoveryEnabled) {
             const missing = new Map<string, UnresolvedReference>();
             for (const ref of references) {
@@ -130,6 +139,9 @@ export default function starlightGlossary(
               );
               if (report.added.length > 0) mutated = true;
             }
+
+            const filled = await fillCacheHoles(indexRef, cacheRef, logger);
+            if (filled > 0) mutated = true;
           }
 
           if (mutated) {
@@ -262,8 +274,37 @@ export default function starlightGlossary(
                 `import ${JSON.stringify(path.join(here, "client/tooltip.js"))};`,
               );
             },
-            "astro:build:done": finalize,
-            "astro:server:done": finalize,
+            "astro:build:done": async () => {
+              await finalize();
+            },
+            "astro:server:setup": () => {
+              // In dev, poll for new references and finalize when we see
+              // them. This lets alias promotion, Wikipedia discovery, and
+              // lint run while the dev server is up — not just at exit.
+              devTimer = setInterval(async () => {
+                if (finalizing) return;
+                if (references.length === lastFinalizeRefCount) return;
+                finalizing = true;
+                try {
+                  const count = references.length;
+                  await finalize();
+                  lastFinalizeRefCount = count;
+                } catch (err) {
+                  logger.warn(
+                    `dev-mode finalize failed: ${(err as Error).message}`,
+                  );
+                } finally {
+                  finalizing = false;
+                }
+              }, 5000);
+            },
+            "astro:server:done": async () => {
+              if (devTimer) {
+                clearInterval(devTimer);
+                devTimer = null;
+              }
+              await finalize();
+            },
           },
         });
 

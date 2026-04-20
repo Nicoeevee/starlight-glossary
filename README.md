@@ -2,7 +2,7 @@
 
 A [Starlight](https://starlight.astro.build/) plugin that adds an interactive glossary with hover tooltips to your Astro documentation site. Writes one glossary reference in any doc and the plugin does the rest: auto-fetches a Wikipedia summary, auto-tags further mentions of the same term, renders a `/glossary` index page, and shows a rich popover on hover or tap.
 
-Designed to be zero-ceremony: no per-term markdown files, no CLI commands, no content collection to configure. A single `glossary.json` file lives at your project root and the plugin keeps it (and a sibling `glossary-cache.json`) up to date every build.
+Designed to be zero-ceremony: no per-term markdown files, no CLI commands, no content collection to configure. A single `glossary.json` file lives at your project root and the plugin keeps it (and a sibling `glossary-cache.json`) up to date as you work — whether you're running `astro dev` or `astro build`.
 
 ## What it does
 
@@ -149,17 +149,17 @@ starlightGlossary({
 
 ## How the build works
 
-Every build runs the same pipeline:
+Every page render runs the same pipeline:
 
-1. **Load** `glossary.json` + `glossary-cache.json` (missing cache is tolerated — it gets populated below).
+1. **Load** `glossary.json` + `glossary-cache.json` at startup (missing cache is tolerated — it gets populated below).
 2. **Remark pass A**: rewrite every `[x](glossary:...)` link to a tagged `<a class="sl-glossary-term">`. Record the reference (slug + label) for the finalize step.
 3. **Remark pass B (auto-tag)**: walk text nodes, match against the alias index, wrap first occurrences in the same tagged-anchor form. Skips code blocks, headings, existing links, and MDX JSX elements.
 4. **Lint pass**: count untagged ALL-CAPS acronyms (2–6 letters, starting with a letter) and repeated capitalised proper nouns (2–4 words).
-5. **Finalize** (`astro:build:done` / `astro:server:done`):
-   - Merge any link labels seen during rendering into the target entry's `aliases`.
-   - For any slug that was referenced but isn't in the index, fetch Wikipedia (exact title → redirect → fail). Add accepted results to `glossary.json` + `glossary-cache.json`.
-   - Write both files atomically (tmp + rename).
-   - Print lint findings to the console and `.astro/glossary-lint.md`.
+
+The finalize step — alias promotion, Wikipedia discovery, atomic writes, lint report — runs at two different triggers:
+
+- **`astro build`** — once at `astro:build:done`, after every page has been rendered.
+- **`astro dev`** — on a 5-second poll while the dev server is running. Only actually does work if new references have been seen since the last run, so it's cheap. Also runs one final pass on shutdown.
 
 No manual CLI steps. Editing `glossary.json` by hand works fine — the plugin respects everything you set and only extends.
 

@@ -21,12 +21,17 @@ export interface WikipediaSummary {
 
 const API_BASE = "https://en.wikipedia.org/api/rest_v1";
 
-/** Fetch Wikipedia summary for a given article title/slug. Returns null on
- *  network error. Sets `missing:true` on 404 and `disambiguation:true` when
- *  the API indicates a disambiguation page. */
-export async function fetchWikipedia(
-  title: string,
-): Promise<WikipediaSummary | null> {
+export interface FetchResult {
+  summary: WikipediaSummary | null;
+  /** Raw diagnostic when the fetch failed (network error, non-2xx, etc). */
+  errorReason?: string;
+}
+
+/** Fetch Wikipedia summary for a given article title/slug. Returns a
+ *  structured result — `{summary}` on success (including 404 as
+ *  `summary.missing=true`), or `{summary: null, errorReason}` on network
+ *  failure or unexpected status. */
+export async function fetchWikipedia(title: string): Promise<FetchResult> {
   const slug = title.replace(/ /g, "_");
   const url = `${API_BASE}/page/summary/${encodeURIComponent(slug)}?redirect=true`;
   try {
@@ -39,16 +44,23 @@ export async function fetchWikipedia(
     });
     if (res.status === 404) {
       return {
-        title,
-        description: "",
-        extract_html: "",
-        url: "",
-        slug,
-        disambiguation: false,
-        missing: true,
+        summary: {
+          title,
+          description: "",
+          extract_html: "",
+          url: "",
+          slug,
+          disambiguation: false,
+          missing: true,
+        },
       };
     }
-    if (!res.ok) return null;
+    if (!res.ok) {
+      return {
+        summary: null,
+        errorReason: `HTTP ${res.status} ${res.statusText}`,
+      };
+    }
     const data = (await res.json()) as {
       title: string;
       description?: string;
@@ -57,34 +69,67 @@ export async function fetchWikipedia(
       type?: string;
     };
     return {
-      title: data.title,
-      description: data.description ?? "",
-      extract_html: data.extract_html ?? "",
-      url: data.content_urls?.desktop?.page ?? "",
-      slug: data.title.replace(/ /g, "_"),
-      disambiguation: data.type === "disambiguation",
-      missing: false,
+      summary: {
+        title: data.title,
+        description: data.description ?? "",
+        extract_html: data.extract_html ?? "",
+        url: data.content_urls?.desktop?.page ?? "",
+        slug: data.title.replace(/ /g, "_"),
+        disambiguation: data.type === "disambiguation",
+        missing: false,
+      },
     };
-  } catch {
-    return null;
+  } catch (err) {
+    return {
+      summary: null,
+      errorReason: (err as Error).message ?? "unknown fetch error",
+    };
   }
 }
 
-/** Fetch summaries for a list of titles with a concurrency cap. */
+/** Fetch summaries for a list of titles with a concurrency cap.
+ *  Serialises per-worker so the total concurrent in-flight requests never
+ *  exceeds `concurrency`. Retries transient failures (network errors, 5xx,
+ *  429) up to twice with exponential backoff. */
 export async function fetchManyWikipedia(
   titles: string[],
-  concurrency: number = 6,
-): Promise<Map<string, WikipediaSummary | null>> {
-  const out = new Map<string, WikipediaSummary | null>();
+  concurrency: number = 3,
+): Promise<Map<string, FetchResult>> {
+  const out = new Map<string, FetchResult>();
   let i = 0;
   const workers = Array.from({ length: concurrency }, async () => {
     while (i < titles.length) {
       const idx = i++;
       const title = titles[idx] as string;
-      out.set(title, await fetchWikipedia(title));
-      await new Promise((r) => setTimeout(r, 80));
+      let result = await fetchWikipedia(title);
+      let attempt = 1;
+      while (
+        result.summary === null &&
+        result.errorReason &&
+        attempt <= 2 &&
+        shouldRetry(result.errorReason)
+      ) {
+        await new Promise((r) => setTimeout(r, 400 * 2 ** (attempt - 1)));
+        result = await fetchWikipedia(title);
+        attempt++;
+      }
+      out.set(title, result);
+      await new Promise((r) => setTimeout(r, 150));
     }
   });
   await Promise.all(workers);
   return out;
+}
+
+function shouldRetry(reason: string): boolean {
+  return (
+    reason.includes("fetch failed") ||
+    reason.includes("ECONNRESET") ||
+    reason.includes("ETIMEDOUT") ||
+    reason.includes("429") ||
+    reason.includes("500") ||
+    reason.includes("502") ||
+    reason.includes("503") ||
+    reason.includes("504")
+  );
 }
