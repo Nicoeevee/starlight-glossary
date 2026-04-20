@@ -1,0 +1,78 @@
+/* starlight-glossary tooltip styles.
+ *
+ * Terms are rendered as <a class="sl-glossary-term"> by the remark transform;
+ * the popover is a native HTML Popover (<div popover="manual">) created on
+ * demand by the client script.
+ */
+
+.sl-markdown-content a.sl-glossary-term {
+  text-decoration-style: dotted;
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.2em;
+  cursor: help;
+}
+
+.sl-glossary-popover[popover] {
+  position: absolute;
+  inset: auto;
+  margin: 0;
+  padding: 0.75rem 1rem 0.9rem;
+  max-width: min(28rem, calc(100vw - 2rem));
+  background: var(--sl-color-bg-nav);
+  color: var(--sl-color-text);
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  z-index: 1000;
+}
+.sl-glossary-popover__term {
+  margin: 0 1.5rem 0.35rem 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--sl-color-text-accent);
+}
+.sl-glossary-popover__body > :first-child {
+  margin-top: 0;
+}
+.sl-glossary-popover__body > :last-child {
+  margin-bottom: 0;
+}
+.sl-glossary-popover__body p {
+  margin: 0.35rem 0;
+}
+.sl-glossary-popover__body a {
+  color: var(--sl-color-text-accent);
+}
+.sl-glossary-popover__footer {
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--sl-color-hairline);
+  font-size: 0.8rem;
+  color: var(--sl-color-gray-3);
+}
+.sl-glossary-popover__footer a {
+  color: var(--sl-color-text-accent);
+  text-decoration: none;
+}
+.sl-glossary-popover__footer a:hover {
+  text-decoration: underline;
+}
+.sl-glossary-popover__close {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.4rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--sl-color-text);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 0.25rem;
+}
+.sl-glossary-popover__close:hover {
+  background: var(--sl-color-gray-6);
+}

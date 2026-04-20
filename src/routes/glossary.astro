@@ -1,0 +1,68 @@
+---
+// /glossary — a single page listing every glossary term with its full
+// definition. Uses Starlight's page layout so it fits the rest of the
+// docs naturally (sidebar, TOC, search indexing).
+
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import { getCollection, render } from "astro:content";
+
+const entries = (await getCollection("glossary")).sort((a, b) =>
+  a.data.term.localeCompare(b.data.term),
+);
+
+const rendered = await Promise.all(
+  entries.map(async (e) => ({ entry: e, ...(await render(e)) })),
+);
+
+const headings = entries.map((e) => ({
+  depth: 2,
+  slug: e.id,
+  text: e.data.term,
+}));
+---
+
+<StarlightPage
+  frontmatter={{ title: "Glossary", description: "Technical glossary" }}
+  headings={headings}
+>
+  <p>
+    This page collects every term used across the documentation along with a
+    short definition and (when available) a link to further reading.
+  </p>
+
+  {
+    rendered.map(({ entry, Content }) => (
+      <section id={entry.id} class="sl-glossary-entry">
+        <h2>{entry.data.term}</h2>
+        {entry.data.aliases && entry.data.aliases.length > 0 && (
+          <p class="sl-glossary-entry__aliases">
+            Also known as: {entry.data.aliases.join(", ")}
+          </p>
+        )}
+        <Content />
+        {entry.data.wikipedia && (
+          <p>
+            <a
+              href={`https://en.wikipedia.org/wiki/${entry.data.wikipedia}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Wikipedia: {entry.data.wikipedia.replace(/_/g, " ")}
+            </a>
+          </p>
+        )}
+      </section>
+    ))
+  }
+</StarlightPage>
+
+<style>
+  .sl-glossary-entry {
+    margin-block: 2rem;
+  }
+  .sl-glossary-entry__aliases {
+    color: var(--sl-color-gray-3);
+    font-size: 0.9rem;
+    margin-top: -0.5rem;
+  }
+</style>
