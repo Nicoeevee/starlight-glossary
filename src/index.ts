@@ -82,11 +82,35 @@ export default function starlightGlossary(
         let indexRef!: GlossaryIndex;
         let cacheRef!: GlossaryCache;
         let lintCollector: ReturnType<typeof createLintCollector> | null = null;
-        // Dev-mode bookkeeping so the periodic finalize timer only does work
-        // when new references have been collected since the last run.
-        let lastFinalizeRefCount = 0;
+        // Dev-mode bookkeeping. We don't poll — instead, the remark
+        // pass's onReference callback schedules a debounced finalize when
+        // it sees content we haven't processed yet (new slug OR new
+        // alias label for an existing slug). That way work only happens
+        // when docs actually change.
         let finalizing = false;
-        let devTimer: ReturnType<typeof setInterval> | null = null;
+        let devDebounce: ReturnType<typeof setTimeout> | null = null;
+        let devMode = false;
+        const knownSlugsSeen = new Set<string>();
+        const knownAliasCandidates = new Map<string, Set<string>>();
+
+        const scheduleDevFinalize = () => {
+          if (!devMode) return;
+          if (devDebounce) clearTimeout(devDebounce);
+          devDebounce = setTimeout(async () => {
+            devDebounce = null;
+            if (finalizing) return;
+            finalizing = true;
+            try {
+              await finalize();
+            } catch (err) {
+              logger.warn(
+                `dev-mode finalize failed: ${(err as Error).message}`,
+              );
+            } finally {
+              finalizing = false;
+            }
+          }, 2000);
+        };
 
         const finalize = async () => {
           let mutated = false;
@@ -240,12 +264,25 @@ export default function starlightGlossary(
 
               const onReference = (ref: GlossaryReference) => {
                 references.push(ref);
+                let isNew = false;
+                if (!knownSlugsSeen.has(ref.slug)) {
+                  knownSlugsSeen.add(ref.slug);
+                  if (!indexRef.terms[ref.slug]) isNew = true; // unknown slug → discovery candidate
+                }
                 if (ref.label && ref.label !== ref.slug) {
                   const set =
                     aliasCandidates.get(ref.slug) ?? new Set<string>();
                   set.add(ref.label);
                   aliasCandidates.set(ref.slug, set);
+                  const dedupe =
+                    knownAliasCandidates.get(ref.slug) ?? new Set<string>();
+                  if (!dedupe.has(ref.label)) {
+                    dedupe.add(ref.label);
+                    knownAliasCandidates.set(ref.slug, dedupe);
+                    isNew = true;
+                  }
                 }
+                if (isNew) scheduleDevFinalize();
               };
 
               lintCollector = createLintCollector({
@@ -276,6 +313,18 @@ export default function starlightGlossary(
                   ],
                 },
                 vite: {
+                  // The plugin's client script + styles.css live wherever
+                  // the package is installed. When consumers pull us in
+                  // via `link:` (local development) the path is outside
+                  // the project root and Vite's fs.allow lockdown returns
+                  // 403 for the tooltip script. Allowlist our own
+                  // directory so the tooltip + styles load in both dev
+                  // and production (inside node_modules) builds.
+                  server: {
+                    fs: {
+                      allow: [here],
+                    },
+                  },
                   plugins: [
                     {
                       name: "starlight-glossary-virtual",
@@ -311,36 +360,16 @@ export default function starlightGlossary(
               await finalize();
             },
             "astro:server:setup": () => {
-              // In dev, poll for new references and finalize when we see
-              // them. This lets alias promotion, Wikipedia discovery, and
-              // lint run while the dev server is up — not just at exit.
-              devTimer = setInterval(async () => {
-                if (finalizing) return;
-                if (references.length === lastFinalizeRefCount) return;
-                finalizing = true;
-                try {
-                  const count = references.length;
-                  await finalize();
-                  lastFinalizeRefCount = count;
-                } catch (err) {
-                  logger.warn(
-                    `dev-mode finalize failed: ${(err as Error).message}`,
-                  );
-                } finally {
-                  finalizing = false;
-                }
-              }, 5000);
+              devMode = true;
             },
             "astro:server:done": async () => {
-              if (devTimer) {
-                clearInterval(devTimer);
-                devTimer = null;
+              if (devDebounce) {
+                clearTimeout(devDebounce);
+                devDebounce = null;
               }
               try {
                 await finalize();
               } catch (err) {
-                // Shutting down — don't turn a routine finalize hiccup into
-                // a non-zero exit. Log and move on.
                 logger.warn(
                   `finalize on shutdown failed: ${(err as Error).message}`,
                 );
