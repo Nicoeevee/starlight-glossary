@@ -1,32 +1,53 @@
 ---
-// /glossary — listing of every glossary term with its definition and
-// Wikipedia link. Reads glossary.json + glossary-cache.json via a virtual
-// module injected by the plugin.
+// /glossary — listing of every glossary term grouped alphabetically.
+// Each entry shows: term → Wikipedia one-liner description → full extract.
+// Aliases listed subtly below the heading. Sub-entries with `groupWith`
+// render as nested sections under the parent.
 import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
 import { glossaryData } from "virtual:starlight-glossary/data";
 import { buildWikipediaUrl, prettifyWikipediaTitle } from "../url";
 
 const { terms, context } = glossaryData;
 
-// Order by term name; apply `groupWith` so grouped entries render as
-// sub-items under their parent's heading.
-const entries = Object.values(terms).sort((a, b) =>
-  a.term.localeCompare(b.term),
+// Preferred display name for an entry: the cached Wikipedia `title` when
+// it matches the entry's `term` case-insensitively (so we don't overwrite
+// intentionally-abbreviated user terms like "ACK"); otherwise the entry's
+// own term.
+const displayTerm = (e: typeof terms[string]): string => {
+  const cached = e.cached?.title;
+  if (cached && cached.toLowerCase() === e.term.toLowerCase()) return cached;
+  return e.term;
+};
+
+// Sort & group alphabetically. Children (entries with `groupWith`) nest
+// under their parent rather than getting their own A–Z slot.
+const allEntries = Object.values(terms).sort((a, b) =>
+  displayTerm(a).localeCompare(displayTerm(b)),
 );
-const primaries = entries.filter((e) => !e.groupWith);
-const childrenOf = new Map<string, typeof entries>();
-for (const entry of entries) {
-  if (entry.groupWith) {
-    const bucket = childrenOf.get(entry.groupWith) ?? [];
-    bucket.push(entry);
-    childrenOf.set(entry.groupWith, bucket);
+const parents = allEntries.filter((e) => !e.groupWith);
+const kidsByParent = new Map<string, typeof allEntries>();
+for (const e of allEntries) {
+  if (e.groupWith) {
+    const bucket = kidsByParent.get(e.groupWith) ?? [];
+    bucket.push(e);
+    kidsByParent.set(e.groupWith, bucket);
   }
 }
 
-const headings = primaries.map((e) => ({
+type Section = { letter: string; entries: typeof parents };
+const sections: Section[] = [];
+for (const entry of parents) {
+  const first = displayTerm(entry)[0]?.toUpperCase() ?? "#";
+  const letter = /[A-Z]/.test(first) ? first : "#";
+  const last = sections[sections.length - 1];
+  if (last && last.letter === letter) last.entries.push(entry);
+  else sections.push({ letter, entries: [entry] });
+}
+
+const headings = sections.map((s) => ({
   depth: 2 as const,
-  slug: e.slug,
-  text: e.term,
+  slug: `letter-${s.letter.toLowerCase()}`,
+  text: s.letter,
 }));
 ---
 
@@ -39,74 +60,182 @@ const headings = primaries.map((e) => ({
     and a link to further reading on Wikipedia when available.
   </p>
 
+  <nav class="sl-glossary-jump" aria-label="Jump to letter">
+    {sections.map((s) => (
+      <a href={`#letter-${s.letter.toLowerCase()}`}>{s.letter}</a>
+    ))}
+  </nav>
+
   {
-    primaries.map((entry) => {
-      const kids = childrenOf.get(entry.slug) ?? [];
-      return (
-        <section id={entry.slug} class="sl-glossary-entry">
-          <h2 id={entry.slug}>{entry.term}</h2>
-          {entry.aliases.filter((a) => a !== entry.term).length > 0 && (
-            <p class="sl-glossary-entry__aliases">
-              Also known as:{" "}
-              {entry.aliases.filter((a) => a !== entry.term).join(", ")}
-            </p>
-          )}
-          {entry.definition ? (
-            <p>{entry.definition}</p>
-          ) : (
-            entry.cached && (
-              <div set:html={entry.cached.extract_html} />
-            )
-          )}
-          {entry.wikipedia && (
-            <p>
-              <a
-                href={buildWikipediaUrl(context.wikipediaBase, entry.wikipedia)}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Wikipedia: {prettifyWikipediaTitle(entry.wikipedia)}
-              </a>
-            </p>
-          )}
-          {kids.map((kid) => (
-            <section id={kid.slug} class="sl-glossary-entry sl-glossary-entry--child">
-              <h3 id={kid.slug}>{kid.term}</h3>
-              {kid.definition ? (
-                <p>{kid.definition}</p>
-              ) : (
-                kid.cached && <div set:html={kid.cached.extract_html} />
+    sections.map((section) => (
+      <section class="sl-glossary-section">
+        <h2 id={`letter-${section.letter.toLowerCase()}`}>{section.letter}</h2>
+        {section.entries.map((entry) => {
+          const kids = kidsByParent.get(entry.slug) ?? [];
+          const display = displayTerm(entry);
+          return (
+            <article id={entry.slug} class="sl-glossary-entry">
+              <h3 id={entry.slug}>{display}</h3>
+              {entry.cached?.description && (
+                <p class="sl-glossary-entry__tagline">
+                  {entry.cached.description}
+                </p>
               )}
-              {kid.wikipedia && (
-                <p>
+              {(() => {
+                const others = entry.aliases.filter((a) => a !== display);
+                return (
+                  others.length > 0 && (
+                    <p class="sl-glossary-entry__aliases">
+                      <em>Also known as:</em> {others.join(", ")}
+                    </p>
+                  )
+                );
+              })()}
+              {entry.definition ? (
+                <div class="sl-glossary-entry__body">
+                  <p>{entry.definition}</p>
+                </div>
+              ) : (
+                entry.cached?.extract_html && (
+                  <div
+                    class="sl-glossary-entry__body"
+                    set:html={entry.cached.extract_html}
+                  />
+                )
+              )}
+              {entry.wikipedia && (
+                <p class="sl-glossary-entry__wikipedia">
                   <a
-                    href={buildWikipediaUrl(context.wikipediaBase, kid.wikipedia)}
+                    href={buildWikipediaUrl(context.wikipediaBase, entry.wikipedia)}
                     target="_blank"
                     rel="noreferrer"
                   >
-                    Wikipedia: {prettifyWikipediaTitle(kid.wikipedia)}
+                    Read more on Wikipedia: {prettifyWikipediaTitle(entry.wikipedia)}
                   </a>
                 </p>
               )}
-            </section>
-          ))}
-        </section>
-      );
-    })
+              {kids.map((kid) => {
+                const kidDisplay = displayTerm(kid);
+                const kidOthers = kid.aliases.filter((a) => a !== kidDisplay);
+                return (
+                  <article id={kid.slug} class="sl-glossary-entry sl-glossary-entry--child">
+                    <h4 id={kid.slug}>{kidDisplay}</h4>
+                    {kid.cached?.description && (
+                      <p class="sl-glossary-entry__tagline">
+                        {kid.cached.description}
+                      </p>
+                    )}
+                    {kidOthers.length > 0 && (
+                      <p class="sl-glossary-entry__aliases">
+                        <em>Also known as:</em> {kidOthers.join(", ")}
+                      </p>
+                    )}
+                    {kid.definition ? (
+                      <div class="sl-glossary-entry__body">
+                        <p>{kid.definition}</p>
+                      </div>
+                    ) : (
+                      kid.cached?.extract_html && (
+                        <div
+                          class="sl-glossary-entry__body"
+                          set:html={kid.cached.extract_html}
+                        />
+                      )
+                    )}
+                    {kid.wikipedia && (
+                      <p class="sl-glossary-entry__wikipedia">
+                        <a
+                          href={buildWikipediaUrl(context.wikipediaBase, kid.wikipedia)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Read more on Wikipedia: {prettifyWikipediaTitle(kid.wikipedia)}
+                        </a>
+                      </p>
+                    )}
+                  </article>
+                );
+              })}
+            </article>
+          );
+        })}
+      </section>
+    ))
   }
 </StarlightPage>
 
 <style>
+  .sl-glossary-jump {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-block: 1rem 2rem;
+    padding: 0.75rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg-nav);
+  }
+  .sl-glossary-jump a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.8rem;
+    height: 1.8rem;
+    padding: 0 0.4rem;
+    border-radius: 0.3rem;
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-decoration: none;
+    color: var(--sl-color-text-accent);
+    background: var(--sl-color-gray-6);
+  }
+  .sl-glossary-jump a:hover {
+    background: var(--sl-color-accent-low);
+  }
+
+  .sl-glossary-section {
+    margin-block: 2.5rem;
+  }
+  .sl-glossary-section > h2 {
+    margin-bottom: 1rem;
+    border-bottom: 2px solid var(--sl-color-accent-low);
+    padding-bottom: 0.25rem;
+  }
+
   .sl-glossary-entry {
-    margin-block: 2rem;
+    margin-block: 1.5rem;
+    padding-block: 0.25rem;
+  }
+  .sl-glossary-entry > h3,
+  .sl-glossary-entry > h4 {
+    margin-bottom: 0.15rem;
+  }
+  .sl-glossary-entry__tagline {
+    margin-top: 0;
+    margin-bottom: 0.4rem;
+    color: var(--sl-color-gray-3);
+    font-size: 0.95rem;
+    font-style: italic;
   }
   .sl-glossary-entry__aliases {
+    margin-block: 0.25rem 0.5rem;
     color: var(--sl-color-gray-3);
-    font-size: 0.9rem;
-    margin-top: -0.5rem;
+    font-size: 0.85rem;
+  }
+  .sl-glossary-entry__body {
+    margin-block: 0.5rem;
+  }
+  .sl-glossary-entry__body > :first-child {
+    margin-top: 0;
+  }
+  .sl-glossary-entry__wikipedia {
+    margin-block: 0.5rem 0;
+    font-size: 0.85rem;
   }
   .sl-glossary-entry--child {
     margin-left: 1.5rem;
-    margin-block: 1rem;
+    margin-block: 1.25rem;
+    padding-left: 1rem;
+    border-left: 2px solid var(--sl-color-gray-6);
   }
 </style>

@@ -121,6 +121,7 @@ function ensurePopover() {
   popover.innerHTML = `
     <button type="button" class="sl-glossary-popover__close" aria-label="Close">×</button>
     <h3 class="sl-glossary-popover__term"></h3>
+    <p class="sl-glossary-popover__tagline"></p>
     <div class="sl-glossary-popover__body"></div>
     <div class="sl-glossary-popover__footer"></div>
   `;
@@ -161,12 +162,15 @@ async function showFor(term) {
   const entry = data[slug];
   const pop = ensurePopover();
   const termEl = pop.querySelector(".sl-glossary-popover__term");
+  const taglineEl = pop.querySelector(".sl-glossary-popover__tagline");
   const bodyEl = pop.querySelector(".sl-glossary-popover__body");
   const footerEl = pop.querySelector(".sl-glossary-popover__footer");
-  if (!termEl || !bodyEl || !footerEl) return;
+  if (!termEl || !taglineEl || !bodyEl || !footerEl) return;
 
   if (entry) {
     termEl.textContent = prettifyTerm(entry.term);
+    taglineEl.textContent = entry.description || "";
+    taglineEl.style.display = entry.description ? "" : "none";
     bodyEl.innerHTML = entry.html;
     const parts = [`<a href="/glossary#${encodeURIComponent(slug)}">Read more →</a>`];
     if (entry.wikipediaUrl) {
@@ -179,6 +183,7 @@ async function showFor(term) {
     footerEl.innerHTML = parts.join(" · ");
   } else {
     termEl.textContent = prettifyTerm(slug);
+    taglineEl.style.display = "none";
     bodyEl.innerHTML = "<p><em>No definition available.</em></p>";
     footerEl.innerHTML = `<a href="/glossary#${slug}">Open glossary →</a>`;
   }

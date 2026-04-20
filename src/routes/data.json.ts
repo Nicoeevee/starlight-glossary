@@ -18,6 +18,7 @@ export const GET: APIRoute = async () => {
     string,
     {
       term: string;
+      description?: string;
       aliases?: string[];
       html: string;
       wikipedia?: string;
@@ -31,8 +32,16 @@ export const GET: APIRoute = async () => {
       entry.definition != null
         ? `<p>${entry.definition}</p>`
         : entry.cached?.extract_html ?? "";
+    // Prefer Wikipedia's canonical title when it differs only in casing —
+    // matches what /glossary renders so tooltip and index agree.
+    const displayTerm =
+      entry.cached?.title &&
+      entry.cached.title.toLowerCase() === entry.term.toLowerCase()
+        ? entry.cached.title
+        : entry.term;
     out[entry.slug] = {
-      term: entry.term,
+      term: displayTerm,
+      description: entry.cached?.description || undefined,
       aliases: entry.aliases.length > 1 ? entry.aliases : undefined,
       html,
       wikipedia: entry.wikipedia ?? undefined,
