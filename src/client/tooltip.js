@@ -72,7 +72,13 @@ function applyReadState() {
 
 function loadData() {
   if (!dataPromise) {
-    dataPromise = fetch(DATA_URL, { credentials: "same-origin" })
+    // `cache: "no-cache"` still uses the HTTP cache but always
+    // validates with the server (If-None-Match). Prevents a previously
+    // cached empty/partial response from blocking tooltip contents.
+    dataPromise = fetch(DATA_URL, {
+      credentials: "same-origin",
+      cache: "no-cache",
+    })
       .then((r) => (r.ok ? r.json() : {}))
       .catch(() => ({}));
   }

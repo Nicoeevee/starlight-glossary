@@ -49,7 +49,11 @@ export const GET: APIRoute = async () => {
     status: 200,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "public, max-age=3600",
+      // Revalidate on every request. A cached `data.json` that went out
+      // empty (e.g. during a build before the Wikipedia cache had been
+      // populated) could otherwise linger in the browser cache for the
+      // whole max-age window.
+      "Cache-Control": "public, max-age=0, must-revalidate",
     },
   });
 };
