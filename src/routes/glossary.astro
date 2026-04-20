@@ -75,6 +75,7 @@ const headings = sections.map((s) => ({
         {section.entries.map((entry) => {
           const kids = kidsByParent.get(entry.slug) ?? [];
           const display = displayTerm(entry);
+          const others = entry.aliases.filter((a) => a !== display);
           return (
             <article id={entry.slug} class="sl-glossary-entry">
               <h3 id={entry.slug}>{display}</h3>
@@ -83,16 +84,11 @@ const headings = sections.map((s) => ({
                   {entry.cached.description}
                 </p>
               )}
-              {(() => {
-                const others = entry.aliases.filter((a) => a !== display);
-                return (
-                  others.length > 0 && (
-                    <p class="sl-glossary-entry__aliases">
-                      <em>Also known as:</em> {others.join(", ")}
-                    </p>
-                  )
-                );
-              })()}
+              {others.length > 0 && (
+                <p class="sl-glossary-entry__aliases">
+                  <em>Also known as:</em> {others.join(", ")}
+                </p>
+              )}
               {entry.definition ? (
                 <div class="sl-glossary-entry__body">
                   <p>{entry.definition}</p>
@@ -105,6 +101,28 @@ const headings = sections.map((s) => ({
                   />
                 )
               )}
+              {kids.length > 0 && (
+                <p class="sl-glossary-entry__variants">
+                  <em>Variants:</em>{" "}
+                  {kids.map((kid, i) => {
+                    const kidDisplay = displayTerm(kid);
+                    const href = kid.wikipedia
+                      ? buildWikipediaUrl(context.wikipediaBase, kid.wikipedia)
+                      : `#${kid.slug}`;
+                    return (
+                      <>
+                        {/* Invisible anchor so doc links to the child slug
+                             scroll to this entry. */}
+                        <span id={kid.slug} class="sr-only" aria-hidden="true" />
+                        <a href={href} target="_blank" rel="noreferrer">
+                          {kidDisplay}
+                        </a>
+                        {i < kids.length - 1 && <span> · </span>}
+                      </>
+                    );
+                  })}
+                </p>
+              )}
               {entry.wikipedia && (
                 <p class="sl-glossary-entry__wikipedia">
                   <a
@@ -116,48 +134,6 @@ const headings = sections.map((s) => ({
                   </a>
                 </p>
               )}
-              {kids.map((kid) => {
-                const kidDisplay = displayTerm(kid);
-                const kidOthers = kid.aliases.filter((a) => a !== kidDisplay);
-                return (
-                  <article id={kid.slug} class="sl-glossary-entry sl-glossary-entry--child">
-                    <h4 id={kid.slug}>{kidDisplay}</h4>
-                    {kid.cached?.description && (
-                      <p class="sl-glossary-entry__tagline">
-                        {kid.cached.description}
-                      </p>
-                    )}
-                    {kidOthers.length > 0 && (
-                      <p class="sl-glossary-entry__aliases">
-                        <em>Also known as:</em> {kidOthers.join(", ")}
-                      </p>
-                    )}
-                    {kid.definition ? (
-                      <div class="sl-glossary-entry__body">
-                        <p>{kid.definition}</p>
-                      </div>
-                    ) : (
-                      kid.cached?.extract_html && (
-                        <div
-                          class="sl-glossary-entry__body"
-                          set:html={kid.cached.extract_html}
-                        />
-                      )
-                    )}
-                    {kid.wikipedia && (
-                      <p class="sl-glossary-entry__wikipedia">
-                        <a
-                          href={buildWikipediaUrl(context.wikipediaBase, kid.wikipedia)}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Read more on Wikipedia: {prettifyWikipediaTitle(kid.wikipedia)}
-                        </a>
-                      </p>
-                    )}
-                  </article>
-                );
-              })}
             </article>
           );
         })}
@@ -234,10 +210,27 @@ const headings = sections.map((s) => ({
     margin-block: 0.5rem 0;
     font-size: 0.85rem;
   }
-  .sl-glossary-entry--child {
-    margin-left: 1.5rem;
-    margin-block: 1.25rem;
-    padding-left: 1rem;
-    border-left: 2px solid var(--sl-color-gray-6);
+  .sl-glossary-entry__variants {
+    margin-block: 0.5rem;
+    color: var(--sl-color-gray-3);
+    font-size: 0.85rem;
+  }
+  .sl-glossary-entry__variants a {
+    text-decoration: none;
+    color: var(--sl-color-text-accent);
+  }
+  .sl-glossary-entry__variants a:hover {
+    text-decoration: underline;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 </style>
