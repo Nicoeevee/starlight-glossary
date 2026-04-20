@@ -295,7 +295,7 @@ async function loadGlossaryFiles(
     cache = JSON.parse(await readFile(cachePath, "utf8"));
   } catch {
     logger.warn(
-      `Could not read ${cachePath}; tooltips will render without Wikipedia summaries until :refresh runs.`,
+      `${cachePath} not found — any glossary references will be looked up on Wikipedia during this build.`,
     );
   }
   return { index, cache };
