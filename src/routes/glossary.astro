@@ -1,23 +1,31 @@
 ---
-// /glossary — a single page listing every glossary term with its full
-// definition. Uses Starlight's page layout so it fits the rest of the
-// docs naturally (sidebar, TOC, search indexing).
-
+// /glossary — listing of every glossary term with its definition and
+// Wikipedia link. Reads glossary.json + glossary-cache.json via a virtual
+// module injected by the plugin.
 import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
-import { getCollection, render } from "astro:content";
+import { glossaryData } from "virtual:starlight-glossary/data";
 
-const entries = (await getCollection("glossary")).sort((a, b) =>
-  a.data.term.localeCompare(b.data.term),
+const { terms, context } = glossaryData;
+
+// Order by term name; apply `groupWith` so grouped entries render as
+// sub-items under their parent's heading.
+const entries = Object.values(terms).sort((a, b) =>
+  a.term.localeCompare(b.term),
 );
+const primaries = entries.filter((e) => !e.groupWith);
+const childrenOf = new Map<string, typeof entries>();
+for (const entry of entries) {
+  if (entry.groupWith) {
+    const bucket = childrenOf.get(entry.groupWith) ?? [];
+    bucket.push(entry);
+    childrenOf.set(entry.groupWith, bucket);
+  }
+}
 
-const rendered = await Promise.all(
-  entries.map(async (e) => ({ entry: e, ...(await render(e)) })),
-);
-
-const headings = entries.map((e) => ({
-  depth: 2,
-  slug: e.id,
-  text: e.data.term,
+const headings = primaries.map((e) => ({
+  depth: 2 as const,
+  slug: e.slug,
+  text: e.term,
 }));
 ---
 
@@ -26,33 +34,64 @@ const headings = entries.map((e) => ({
   headings={headings}
 >
   <p>
-    This page collects every term used across the documentation along with a
-    short definition and (when available) a link to further reading.
+    Every term referenced across the documentation, with a short definition
+    and a link to further reading on Wikipedia when available.
   </p>
 
   {
-    rendered.map(({ entry, Content }) => (
-      <section id={entry.id} class="sl-glossary-entry">
-        <h2>{entry.data.term}</h2>
-        {entry.data.aliases && entry.data.aliases.length > 0 && (
-          <p class="sl-glossary-entry__aliases">
-            Also known as: {entry.data.aliases.join(", ")}
-          </p>
-        )}
-        <Content />
-        {entry.data.wikipedia && (
-          <p>
-            <a
-              href={`https://en.wikipedia.org/wiki/${entry.data.wikipedia}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Wikipedia: {entry.data.wikipedia.replace(/_/g, " ")}
-            </a>
-          </p>
-        )}
-      </section>
-    ))
+    primaries.map((entry) => {
+      const kids = childrenOf.get(entry.slug) ?? [];
+      return (
+        <section id={entry.slug} class="sl-glossary-entry">
+          <h2 id={entry.slug}>{entry.term}</h2>
+          {entry.aliases.filter((a) => a !== entry.term).length > 0 && (
+            <p class="sl-glossary-entry__aliases">
+              Also known as:{" "}
+              {entry.aliases.filter((a) => a !== entry.term).join(", ")}
+            </p>
+          )}
+          {entry.definition ? (
+            <p>{entry.definition}</p>
+          ) : (
+            entry.cached && (
+              <div set:html={entry.cached.extract_html} />
+            )
+          )}
+          {entry.wikipedia && (
+            <p>
+              <a
+                href={`${context.wikipediaBase}${entry.wikipedia.replace(/ /g, "_")}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Wikipedia: {entry.wikipedia.replace(/_/g, " ")}
+              </a>
+            </p>
+          )}
+          {kids.map((kid) => (
+            <section id={kid.slug} class="sl-glossary-entry sl-glossary-entry--child">
+              <h3 id={kid.slug}>{kid.term}</h3>
+              {kid.definition ? (
+                <p>{kid.definition}</p>
+              ) : (
+                kid.cached && <div set:html={kid.cached.extract_html} />
+              )}
+              {kid.wikipedia && (
+                <p>
+                  <a
+                    href={`${context.wikipediaBase}${kid.wikipedia.replace(/ /g, "_")}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Wikipedia: {kid.wikipedia.replace(/_/g, " ")}
+                  </a>
+                </p>
+              )}
+            </section>
+          ))}
+        </section>
+      );
+    })
   }
 </StarlightPage>
 
@@ -64,5 +103,9 @@ const headings = entries.map((e) => ({
     color: var(--sl-color-gray-3);
     font-size: 0.9rem;
     margin-top: -0.5rem;
+  }
+  .sl-glossary-entry--child {
+    margin-left: 1.5rem;
+    margin-block: 1rem;
   }
 </style>

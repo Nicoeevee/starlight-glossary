@@ -1,18 +1,14 @@
-// Build-time JSON endpoint that ships a compact map of
+// Build-time JSON endpoint that serves a compact map for the client tooltip.
+// Shape:
 //   { [slug]: { term, aliases, html, wikipedia } }
-// for the client tooltip to fetch once and cache. Rendered HTML comes
-// from Astro's experimental container so we reuse the exact same
-// markdown-to-HTML pipeline Starlight uses on the /glossary page.
+// `html` is the cached Wikipedia extract (or `definition` when overridden).
 import type { APIRoute } from "astro";
-import { getCollection, render } from "astro:content";
-import { experimental_AstroContainer as AstroContainer } from "astro/container";
+import { glossaryData } from "virtual:starlight-glossary/data";
 
 export const prerender = true;
 
 export const GET: APIRoute = async () => {
-  const entries = await getCollection("glossary");
-  const container = await AstroContainer.create();
-
+  const { terms, context } = glossaryData;
   const out: Record<
     string,
     {
@@ -20,17 +16,23 @@ export const GET: APIRoute = async () => {
       aliases?: string[];
       html: string;
       wikipedia?: string;
+      wikipediaUrl?: string;
     }
   > = {};
 
-  for (const entry of entries) {
-    const { Content } = await render(entry);
-    const html = await container.renderToString(Content);
-    out[entry.id] = {
-      term: entry.data.term,
-      aliases: entry.data.aliases,
-      html: html.trim(),
-      wikipedia: entry.data.wikipedia,
+  for (const entry of Object.values(terms)) {
+    const html =
+      entry.definition != null
+        ? `<p>${entry.definition}</p>`
+        : entry.cached?.extract_html ?? "";
+    out[entry.slug] = {
+      term: entry.term,
+      aliases: entry.aliases.length > 1 ? entry.aliases : undefined,
+      html,
+      wikipedia: entry.wikipedia ?? undefined,
+      wikipediaUrl: entry.wikipedia
+        ? `${context.wikipediaBase}${entry.wikipedia.replace(/ /g, "_")}`
+        : undefined,
     };
   }
 

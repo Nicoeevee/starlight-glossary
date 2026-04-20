@@ -1,23 +1,31 @@
 import { visit } from "unist-util-visit";
 
 export interface RemarkGlossaryOptions {
-  collection?: string;
-  /** URL protocol that identifies glossary links. Default: `"glossary"`. */
-  linkProtocol?: string;
-  /** Route prefix for the glossary index. Default: `"/glossary"`. */
+  /** Valid slugs in the glossary, used to warn on unknown references. */
+  knownSlugs?: Set<string>;
+  /** URL path prefix for the glossary index (e.g. "/glossary"). */
   routePrefix?: string;
+  /** Legacy protocol to recognise as a glossary link (e.g. "glossary"
+   *  matches `[x](glossary:slug)`). */
+  legacyProtocol?: string;
 }
 
-/**
- * Remark plugin: rewrite `[label](glossary:slug)` into a link that
- *   - navigates to `<routePrefix>#slug` on click (works without JS),
- *   - is tagged `data-glossary-term="slug"` + class `sl-glossary-term`
- *     so the client tooltip can show a rich popover on hover/tap.
+/** Remark plugin: rewrite both forms of glossary link into a tagged HTML
+ *  anchor that the client tooltip script recognises.
+ *
+ *   - `[label](/glossary#slug)` (canonical, standard markdown)
+ *   - `[label](glossary:slug)`  (legacy, still accepted)
+ *
+ * Output:
+ *   <a href="/glossary#slug" data-glossary-term="slug" class="sl-glossary-term">
+ *
+ * Link label is treated as display text only — it is NEVER promoted to an
+ * alias. Aliases must be set explicitly in glossary.json.
  */
 export default function remarkGlossary(options: RemarkGlossaryOptions = {}) {
-  const linkProtocol = options.linkProtocol ?? "glossary";
   const routePrefix = options.routePrefix ?? "/glossary";
-  const prefix = `${linkProtocol}:`;
+  const legacyProtocol = options.legacyProtocol ?? "glossary";
+  const known = options.knownSlugs;
 
   return function transformer(tree: unknown) {
     visit(tree as Parameters<typeof visit>[0], "link", (node: unknown) => {
@@ -26,9 +34,26 @@ export default function remarkGlossary(options: RemarkGlossaryOptions = {}) {
         data?: { hProperties?: Record<string, unknown> };
       };
       const url = n.url ?? "";
-      if (!url.startsWith(prefix)) return;
-      const slug = url.slice(prefix.length).trim();
-      if (!slug) return;
+
+      let slug: string | null = null;
+
+      const legacy = legacyProtocol + ":";
+      if (url.startsWith(legacy)) {
+        slug = url.slice(legacy.length).trim();
+      } else if (url.startsWith(routePrefix)) {
+        const rest = url.slice(routePrefix.length);
+        if (rest === "" || rest === "/") slug = "";
+        else if (rest.startsWith("#")) slug = rest.slice(1);
+      }
+
+      if (slug === null) return;
+      if (slug === "") return; // plain link to /glossary, no tooltip
+
+      if (known && !known.has(slug)) {
+        // Unknown slug — leave as a plain link, don't tag.
+        n.url = `${routePrefix}#${slug}`;
+        return;
+      }
 
       n.url = `${routePrefix}#${slug}`;
       n.data = n.data || {};
