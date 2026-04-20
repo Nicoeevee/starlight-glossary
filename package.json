@@ -1,7 +1,7 @@
 {
   "name": "starlight-glossary",
   "version": "0.2.0",
-  "description": "Starlight plugin that adds an interactive glossary with hover tooltips. Driven by a single glossary.json index plus a committed Wikipedia cache \u2014 zero content-collection boilerplate.",
+  "description": "Starlight plugin that adds an interactive glossary with hover tooltips. Driven by a single glossary.json index plus a committed Wikipedia cache — zero content-collection boilerplate.",
   "keywords": [
     "astro",
     "astro-integration",
@@ -46,6 +46,7 @@
     "astro": ">=5.0.0"
   },
   "dependencies": {
+    "mdast-util-to-string": "^4.0.0",
     "unist-util-visit": "^5.0.0"
   },
   "devDependencies": {
