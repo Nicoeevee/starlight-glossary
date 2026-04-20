@@ -95,22 +95,26 @@ export default function starlightGlossary(
           for (const [slug, labels] of aliasCandidates) {
             const entry = indexRef.terms[slug];
             if (!entry) continue;
-            for (const label of labels) {
-              if (label === slug) continue;
-              if (!entry.aliases.includes(label)) {
-                entry.aliases.push(label);
-                mutated = true;
-                logger.info(
-                  `auto-promoted "${label}" as alias of "${entry.term}"`,
-                );
-              }
+            for (const rawLabel of labels) {
+              // Always store a clean form — no underscores / %28 artifacts
+              // from Wikipedia slugs that happen to match.
+              const label = cleanAlias(rawLabel);
+              if (!label || label === slug || label === entry.term) continue;
+              if (entry.aliases.includes(label)) continue;
+              // Skip if the cleaned form equals a clean version of an
+              // existing alias (avoid trailing duplicates).
+              if (entry.aliases.some((a) => cleanAlias(a) === label)) continue;
+              entry.aliases.push(label);
+              mutated = true;
+              logger.info(
+                `auto-promoted "${label}" as alias of "${entry.term}"`,
+              );
             }
           }
 
-          // Discover missing slugs via Wikipedia — either entries that
-          // aren't in the index at all (new references in docs), or
-          // entries that exist in the index but have no cached summary
-          // (e.g. after the cache file was deleted).
+          // Discover any new slugs that appeared in doc references but
+          // weren't in the index yet. (Known-slug cache holes get filled
+          // earlier in config:setup so routes see the data.)
           if (discoveryEnabled) {
             const missing = new Map<string, UnresolvedReference>();
             for (const ref of references) {
@@ -139,9 +143,6 @@ export default function starlightGlossary(
               );
               if (report.added.length > 0) mutated = true;
             }
-
-            const filled = await fillCacheHoles(indexRef, cacheRef, logger);
-            if (filled > 0) mutated = true;
           }
 
           if (mutated) {
@@ -202,7 +203,39 @@ export default function starlightGlossary(
               );
               indexRef = index;
               cacheRef = cache;
-              const data = joinGlossary(index, cache, context);
+
+              // Normalise aliases before anything sees them: drop underscored
+              // and URL-encoded duplicates (leftovers from the Wikipedia-slug
+              // era of the data). The cleaned form gets persisted on the
+              // next finalize write.
+              let normalised = false;
+              for (const entry of Object.values(indexRef.terms)) {
+                const before = entry.aliases.length;
+                entry.aliases = normaliseAliases(entry.aliases, entry.term);
+                if (entry.aliases.length !== before) normalised = true;
+              }
+
+              // Critical: fill Wikipedia cache holes BEFORE we build the
+              // virtual module. Route renders (including /glossary and the
+              // tooltip data.json) happen after this returns — if the cache
+              // was empty at this point, the serialised data would be empty
+              // too and nothing short of a restart would fix it.
+              if (discoveryEnabled) {
+                const filled = await fillCacheHoles(
+                  indexRef,
+                  cacheRef,
+                  logger,
+                );
+                if (filled > 0 || normalised) {
+                  cacheRef.fetchedAt = new Date().toISOString();
+                  await writeJsonAtomic(indexPath, indexRef);
+                  await writeJsonAtomic(cachePath, cacheRef);
+                }
+              } else if (normalised) {
+                await writeJsonAtomic(indexPath, indexRef);
+              }
+
+              const data = joinGlossary(indexRef, cacheRef, context);
               const knownSlugs = new Set(Object.keys(data.terms));
 
               const onReference = (ref: GlossaryReference) => {
@@ -303,7 +336,15 @@ export default function starlightGlossary(
                 clearInterval(devTimer);
                 devTimer = null;
               }
-              await finalize();
+              try {
+                await finalize();
+              } catch (err) {
+                // Shutting down — don't turn a routine finalize hiccup into
+                // a non-zero exit. Log and move on.
+                logger.warn(
+                  `finalize on shutdown failed: ${(err as Error).message}`,
+                );
+              }
             },
           },
         });
@@ -314,6 +355,35 @@ export default function starlightGlossary(
       },
     },
   };
+}
+
+/** Normalise a raw alias string: underscores → spaces, %28/%29 → parens,
+ *  trim. Mirrors the prettify rules the UI applies for display. */
+function cleanAlias(s: string): string {
+  return s
+    .replace(/_/g, " ")
+    .replace(/%28/g, "(")
+    .replace(/%29/g, ")")
+    .replace(/%27/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Normalise an entry's alias list: clean each alias, drop duplicates.
+ *  The `term` is always kept as the first alias so auto-tag + lint see it
+ *  as a valid match string. */
+function normaliseAliases(aliases: string[], term: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [term];
+  seen.add(term);
+  for (const raw of aliases) {
+    const cleaned = cleanAlias(raw);
+    if (!cleaned) continue;
+    if (seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    out.push(cleaned);
+  }
+  return out;
 }
 
 async function loadGlossaryFiles(
