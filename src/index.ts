@@ -19,6 +19,7 @@ import {
   type UnresolvedReference,
 } from "./discovery.js";
 import { reconcileWikipediaRedirects } from "./reconcile.js";
+import { rewriteDocRefs } from "./rewrite-refs.js";
 import { remarkAutoTag, type AutoTagMode } from "./autotag.js";
 import { createLintCollector, renderLintReport } from "./lint.js";
 import { writeJsonAtomic } from "./persist.js";
@@ -263,7 +264,7 @@ export default function starlightGlossary(
                 reconcileWikipediaRedirects(indexRef, cacheRef);
               for (const r of report.merged) {
                 logger.info(
-                  `merged "${r.fromTerm}" (${r.from}) into "${r.intoTerm}" (${r.into}) — Wikipedia redirect`,
+                  `merged "${r.fromTerm}" (${r.from}) into "${r.intoTerm}" (${r.into})`,
                 );
               }
               for (const r of report.renamed) {
@@ -286,6 +287,27 @@ export default function starlightGlossary(
                   );
                 }
               }
+
+              // Rewrite doc references so `[x](glossary:old-slug)` in
+              // source becomes `[x](glossary:new-slug)` automatically.
+              // Runs after merge/rename so slug changes propagate without
+              // any manual find-and-replace. The mergedInto stubs remain
+              // as a safety net for any refs we might miss.
+              if (report.merged.length > 0) {
+                const rewrites = new Map<string, string>();
+                for (const m of report.merged) rewrites.set(m.from, m.into);
+                const { filesChanged, refsChanged } = await rewriteDocRefs(
+                  path.join(root, "src/content/docs"),
+                  rewrites,
+                  logger,
+                );
+                if (filesChanged > 0) {
+                  logger.info(
+                    `rewrote ${refsChanged} glossary link(s) across ${filesChanged} doc file(s) to match merged slugs`,
+                  );
+                }
+              }
+
               if (reconciled) shouldPersist = true;
 
               if (shouldPersist) {

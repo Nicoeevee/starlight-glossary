@@ -40,6 +40,13 @@ export function reconcileWikipediaRedirects(
 ): { report: ReconcileReport; mutated: boolean } {
   const report: ReconcileReport = { renamed: [], merged: [], skipped: [] };
 
+  // Pre-pass: fold duplicates where two entries already point at the same
+  // non-fragmented Wikipedia article. This catches cases where a previous
+  // run of the plugin (or the user) set both entries' `wikipedia` to the
+  // same canonical slug, so the redirect-based check below would find
+  // nothing to do.
+  mergeDuplicateArticles(index, cache, report);
+
   const canonicalOwner = (): Map<string, string> => {
     const out = new Map<string, string>();
     for (const [slug, entry] of Object.entries(index.terms)) {
@@ -145,6 +152,67 @@ export function reconcileWikipediaRedirects(
 
 function wikipediaSlug(title: string): string {
   return title.replace(/ /g, "_");
+}
+
+function mergeDuplicateArticles(
+  index: GlossaryIndex,
+  cache: GlossaryCache,
+  report: ReconcileReport,
+): void {
+  // Group non-merged, non-fragmented, non-groupWith entries by article
+  const byArticle = new Map<string, string[]>();
+  for (const [slug, entry] of Object.entries(index.terms)) {
+    if (entry.mergedInto || entry.groupWith) continue;
+    if (!entry.wikipedia || entry.wikipedia.includes("#")) continue;
+    const list = byArticle.get(entry.wikipedia) ?? [];
+    list.push(slug);
+    byArticle.set(entry.wikipedia, list);
+  }
+  for (const [article, slugs] of byArticle) {
+    if (slugs.length < 2) continue;
+    // Pick a canonical winner. Preference:
+    //   1. Slug that matches article-as-kebab-case (e.g. article
+    //      "Authenticated_encryption" → winner slug "authenticated-encryption")
+    //   2. Shortest slug otherwise.
+    const expectedSlug = article.toLowerCase().replace(/_/g, "-");
+    let winner =
+      slugs.find((s) => s === expectedSlug) ??
+      slugs.slice().sort((a, b) => a.length - b.length)[0];
+    if (!winner) continue;
+    const losers = slugs.filter((s) => s !== winner);
+    const winnerEntry = index.terms[winner];
+    if (!winnerEntry) continue;
+    for (const loser of losers) {
+      const loserEntry = index.terms[loser];
+      if (!loserEntry) continue;
+      const myAliases = [loserEntry.term, ...loserEntry.aliases];
+      for (const a of myAliases) {
+        if (
+          a &&
+          !winnerEntry.aliases.includes(a) &&
+          a !== winnerEntry.term
+        ) {
+          winnerEntry.aliases.push(a);
+        }
+      }
+      index.terms[loser] = {
+        term: loserEntry.term,
+        aliases: [],
+        wikipedia: null,
+        caseSensitive: false,
+        definition: null,
+        groupWith: null,
+        mergedInto: winner,
+      };
+      delete cache.terms[loser];
+      report.merged.push({
+        from: loser,
+        fromTerm: loserEntry.term,
+        into: winner,
+        intoTerm: winnerEntry.term,
+      });
+    }
+  }
 }
 
 function canSafelyAdopt(currentTerm: string, canonicalTitle: string): boolean {
