@@ -18,10 +18,53 @@
 
 const SHOW_DELAY = 150;
 const HIDE_DELAY = 250;
+const READ_THRESHOLD_MS = 1500; // tooltip must be visible this long to count as "read"
 const DATA_URL = "/glossary/data.json";
+const READ_STORAGE_KEY = "sl-glossary-read";
 
 /** @type {Promise<Record<string, GlossaryEntry>> | null} */
 let dataPromise = null;
+
+/** @type {Set<string>} */
+let readTerms = loadReadTerms();
+
+function loadReadTerms() {
+  try {
+    const raw = localStorage.getItem(READ_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveReadTerms() {
+  try {
+    localStorage.setItem(READ_STORAGE_KEY, JSON.stringify([...readTerms]));
+  } catch {
+    /* quota or disabled — ignore */
+  }
+}
+
+function markRead(slug) {
+  if (!slug || readTerms.has(slug)) return;
+  readTerms.add(slug);
+  saveReadTerms();
+  document
+    .querySelectorAll(`.sl-glossary-term[data-glossary-term="${CSS.escape(slug)}"]`)
+    .forEach((el) => el.setAttribute("data-glossary-read", "true"));
+}
+
+function applyReadState() {
+  if (readTerms.size === 0) return;
+  document.querySelectorAll(".sl-glossary-term").forEach((el) => {
+    const slug = el.getAttribute("data-glossary-term");
+    if (slug && readTerms.has(slug)) {
+      el.setAttribute("data-glossary-read", "true");
+    }
+  });
+}
 
 /**
  * @typedef {{ term: string, aliases?: string[], html: string, wikipedia?: string }} GlossaryEntry
@@ -51,6 +94,8 @@ let popover = null;
 let activeTerm = null;
 let hideTimer = 0;
 let showTimer = 0;
+let readTimer = 0;
+let currentSlug = null;
 
 function ensurePopover() {
   if (popover) return popover;
@@ -123,6 +168,7 @@ async function showFor(term) {
   }
 
   activeTerm = term;
+  currentSlug = slug;
   try {
     if (!pop.matches(":popover-open")) pop.showPopover();
   } catch {
@@ -130,6 +176,12 @@ async function showFor(term) {
   }
   // Position after layout so offsetWidth/Height are real.
   requestAnimationFrame(position);
+
+  // Start a timer — if the tooltip stays visible for READ_THRESHOLD_MS the
+  // user has spent long enough to count as having read it. The timer is
+  // cancelled on hide.
+  clearTimeout(readTimer);
+  readTimer = window.setTimeout(() => markRead(slug), READ_THRESHOLD_MS);
 }
 
 function scheduleShow(term) {
@@ -145,7 +197,9 @@ function scheduleHide() {
 
 function hideNow() {
   clearTimeout(showTimer);
+  clearTimeout(readTimer);
   activeTerm = null;
+  currentSlug = null;
   if (!popover) return;
   try {
     if (popover.matches(":popover-open")) popover.hidePopover();
@@ -173,6 +227,7 @@ function bind(term) {
 }
 
 function init() {
+  applyReadState();
   document
     .querySelectorAll(".sl-glossary-term[data-glossary-term]")
     .forEach(bind);

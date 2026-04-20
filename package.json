@@ -1,6 +1,6 @@
 {
   "name": "starlight-glossary",
-  "version": "0.2.3",
+  "version": "1.0.0",
   "description": "Starlight plugin that adds an interactive glossary with hover tooltips. Driven by a single glossary.json index plus a committed Wikipedia cache — zero content-collection boilerplate.",
   "keywords": [
     "astro",

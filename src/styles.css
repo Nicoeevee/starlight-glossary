@@ -12,6 +12,28 @@
   cursor: help;
 }
 
+/* Auto-tagged occurrences look identical to explicit ones — the variant
+   class exists for CSS users who want to differentiate. */
+.sl-markdown-content a.sl-glossary-term--auto {
+  /* inherits */
+}
+
+/* Pending: slug referenced but not yet in the glossary (discovery ran
+   but hasn't resolved it). Render as plain text-colored so the author
+   sees it's not fully wired. */
+.sl-markdown-content a.sl-glossary-term--pending {
+  text-decoration-style: wavy;
+  text-decoration-color: var(--sl-color-orange-high, #f59e0b);
+}
+
+/* Read-state: clicked through (browser :visited) or hovered long enough
+   to mark read (client sets data-glossary-read). Only `color` works on
+   :visited due to browser privacy restrictions. */
+.sl-markdown-content a.sl-glossary-term:visited,
+.sl-markdown-content a.sl-glossary-term[data-glossary-read] {
+  color: var(--sl-color-gray-4);
+}
+
 .sl-glossary-popover[popover] {
   position: absolute;
   inset: auto;
