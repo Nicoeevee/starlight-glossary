@@ -14,7 +14,14 @@
     "documentation"
   ],
   "license": "MIT",
-  "author": "Eric Andrechek <eric@wave-rf.com>",
+  "author": {
+    "name": "Wave RF",
+    "email": "github@wave-rf.com",
+    "url": "https://wave-rf.com"
+  },
+  "contributors": [
+    "Eric Andrechek <eric@wave-rf.com>"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/Wave-RF/starlight-glossary.git"

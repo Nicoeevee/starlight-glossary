@@ -133,4 +133,4 @@ When the glossary entry has a `wikipedia` field, it resolves to `https://en.wiki
 
 ## License
 
-MIT © Eric Andrechek
+MIT © [Wave RF](https://wave-rf.com)
