@@ -87,15 +87,20 @@ export default function remarkGlossary(options: RemarkGlossaryOptions = {}) {
       const url = n.url ?? "";
 
       // Parse the link target. Accept:
-      //   glossary            — derive slug from label, no article hint
-      //   glossary:           — same
-      //   glossary:slug       — glossary slug, no article hint
-      //   glossary:Article    — treat article name as the Wikipedia hint
-      //   glossary:Article#Section  — article + fragment
-      // When the URL tail looks like a Wikipedia article (contains an
-      // uppercase letter or underscore), we slugify it for the entry slug
-      // and keep the original as `article` for Wikipedia discovery.
-      // Otherwise it's a literal slug reference.
+      //   glossary               — derive slug from label, no article hint
+      //   glossary:              — same
+      //   glossary:known-slug    — use existing glossary entry
+      //   glossary:new-slug      — create new entry with this slug, query
+      //                            Wikipedia using the label
+      //   glossary:Article_Name  — Wikipedia article reference (slugified
+      //                            for the entry slug)
+      //   glossary:X#Section     — same as above with a sub-section
+      //                            fragment
+      //
+      // Resolution order: match against known glossary slugs first; fall
+      // back to the Wikipedia-article interpretation only when the slug
+      // doesn't exist.  A fragment in the URL is per-reference metadata
+      // either way.
       let explicitSlug: string | null = null;
       let article: string | null = null;
       let fragment: string | null = null;
@@ -110,10 +115,20 @@ export default function remarkGlossary(options: RemarkGlossaryOptions = {}) {
           const head = hashIdx >= 0 ? after.slice(0, hashIdx) : after;
           const tail = hashIdx >= 0 ? after.slice(hashIdx + 1) : "";
           if (tail) fragment = tail;
-          if (looksLikeWikipediaArticle(head)) {
+
+          if (known && known.has(head)) {
+            // Known glossary slug — use directly. Fragment (if any) is
+            // per-reference metadata on top of the existing entry.
+            explicitSlug = head;
+          } else if (looksLikeWikipediaArticle(head) || tail) {
+            // Wikipedia-article form (capitals/underscores/parens/
+            // fragment): use as Wikipedia query; slugify for the entry.
             article = head;
             explicitSlug = slugify(head);
           } else {
+            // Plain slug form for a slug we haven't seen yet. Create a
+            // new entry under this slug; Wikipedia query will fall back
+            // to the link label.
             explicitSlug = head;
           }
         }
