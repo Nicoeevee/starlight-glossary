@@ -1,6 +1,6 @@
 {
   "name": "starlight-glossary",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Starlight plugin that adds an interactive glossary with hover tooltips to your Astro docs site. Authors write `[term](glossary:slug)` in any page, the plugin generates the /glossary index, a JSON data endpoint, and the client-side popover.",
   "keywords": [
     "astro",
