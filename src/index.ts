@@ -313,21 +313,25 @@ export default function starlightGlossary(
                   ],
                 },
                 vite: {
-                  // The plugin's client script + styles.css live wherever
-                  // the package is installed. When consumers pull us in
-                  // via `link:` (local development) the path is outside
-                  // the project root and Vite's fs.allow lockdown returns
-                  // 403 for the tooltip script. Allowlist our own
-                  // directory so the tooltip + styles load in both dev
-                  // and production (inside node_modules) builds.
-                  server: {
-                    fs: {
-                      allow: [here],
-                    },
-                  },
                   plugins: [
                     {
-                      name: "starlight-glossary-virtual",
+                      name: "starlight-glossary",
+                      // Append our install directory onto the resolved
+                      // fs.allow list rather than trying to merge via
+                      // config() or updateConfig — both paths were seen
+                      // to replace the array instead of extending it,
+                      // which broke serving of starlight/node_modules
+                      // assets. configResolved() runs after Vite has
+                      // merged everything else, so we just push.
+                      configResolved(config: {
+                        server?: { fs?: { allow?: string[] } };
+                      }) {
+                        if (!config.server) return;
+                        if (!config.server.fs) return;
+                        const allow = config.server.fs.allow;
+                        if (!Array.isArray(allow)) return;
+                        if (!allow.includes(here)) allow.push(here);
+                      },
                       resolveId(id: string): string | void {
                         if (id === "virtual:starlight-glossary/data")
                           return "\0virtual:starlight-glossary/data";
