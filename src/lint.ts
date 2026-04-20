@@ -24,6 +24,13 @@ interface LintCounter {
   sample: string;
 }
 
+const COMMON_CAPS_WORDS = new Set([
+  "NOT", "OK", "YES", "NO", "ONLY", "ETC", "AND", "OR", "BUT", "FOR",
+  "THE", "A", "AN", "IS", "ARE", "WAS", "WERE", "BE", "TO", "IN", "ON",
+  "AT", "BY", "OF", "IF", "IT", "AS", "ALL", "NEW", "OLD", "GOOD", "BAD",
+  "TODO", "FIXME", "NOTE", "NOTES", "WARNING", "WIP",
+]);
+
 export function createLintCollector(opts: LintOptions) {
   const acronymCounts = new Map<string, LintCounter>();
   const nounCounts = new Map<string, LintCounter>();
@@ -47,43 +54,52 @@ export function createLintCollector(opts: LintOptions) {
     return false;
   };
 
+  // Plugin factory — unified calls this with options; returns the
+  // transformer. The closure captures the shared counters so state
+  // accumulates across all files in the build.
+  function remarkPlugin() {
+    return function transformer(tree: unknown) {
+      if (!opts.enabled) return;
+      visit(
+        tree as Parameters<typeof visit>[0],
+        (node: unknown) => {
+          const n = node as { type: string; value?: string };
+          if (
+            n.type === "code" ||
+            n.type === "inlineCode" ||
+            n.type === "heading" ||
+            n.type === "link" ||
+            n.type === "html"
+          ) {
+            return SKIP;
+          }
+          if (n.type !== "text" || !n.value) return;
+          const text = n.value;
+          // Acronyms: 2–6 chars, must start with a letter (exclude "21", "256").
+          for (const m of text.matchAll(/\b[A-Z][A-Z0-9]{1,5}\b/g)) {
+            const term = m[0];
+            if (isKnownExact(term)) continue;
+            // Skip common English words that happen to be ALL CAPS for
+            // emphasis: NOT, OK, YES, NO, ONLY, ETC, etc.
+            if (COMMON_CAPS_WORDS.has(term)) continue;
+            const prev = acronymCounts.get(term);
+            if (prev) prev.count++;
+            else acronymCounts.set(term, { count: 1, sample: text.slice(0, 100) });
+          }
+          for (const m of text.matchAll(/\b[A-Z][a-z]+(?:\s[A-Z][a-z]+){1,3}\b/g)) {
+            const term = m[0];
+            if (isKnownCi(term)) continue;
+            const prev = nounCounts.get(term);
+            if (prev) prev.count++;
+            else nounCounts.set(term, { count: 1, sample: text.slice(0, 100) });
+          }
+        },
+      );
+    };
+  }
+
   return {
-    remarkPlugin() {
-      return function transformer(tree: unknown) {
-        if (!opts.enabled) return;
-        visit(
-          tree as Parameters<typeof visit>[0],
-          (node: unknown) => {
-            const n = node as { type: string; value?: string };
-            if (
-              n.type === "code" ||
-              n.type === "inlineCode" ||
-              n.type === "heading" ||
-              n.type === "link" ||
-              n.type === "html"
-            ) {
-              return SKIP;
-            }
-            if (n.type !== "text" || !n.value) return;
-            const text = n.value;
-            for (const m of text.matchAll(/\b[A-Z0-9]{2,6}\b/g)) {
-              const term = m[0];
-              if (isKnownExact(term)) continue;
-              const prev = acronymCounts.get(term);
-              if (prev) prev.count++;
-              else acronymCounts.set(term, { count: 1, sample: text.slice(0, 100) });
-            }
-            for (const m of text.matchAll(/\b[A-Z][a-z]+(?:\s[A-Z][a-z]+){1,3}\b/g)) {
-              const term = m[0];
-              if (isKnownCi(term)) continue;
-              const prev = nounCounts.get(term);
-              if (prev) prev.count++;
-              else nounCounts.set(term, { count: 1, sample: text.slice(0, 100) });
-            }
-          },
-        );
-      };
-    },
+    remarkPlugin,
     findings(): LintFinding[] {
       const out: LintFinding[] = [];
       for (const [term, { count, sample }] of acronymCounts) {

@@ -88,6 +88,15 @@ function prettifyTerm(term) {
     .replace(/%29/g, ")");
 }
 
+function escapeHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /** @type {HTMLDivElement | null} */
 let popover = null;
 /** @type {HTMLElement | null} */
@@ -153,11 +162,12 @@ async function showFor(term) {
   if (entry) {
     termEl.textContent = prettifyTerm(entry.term);
     bodyEl.innerHTML = entry.html;
-    const parts = [`<a href="/glossary#${slug}">Read more →</a>`];
-    if (entry.wikipedia) {
-      const wp = entry.wikipedia;
+    const parts = [`<a href="/glossary#${encodeURIComponent(slug)}">Read more →</a>`];
+    if (entry.wikipediaUrl) {
+      // Server-built URL: already includes any fragment and correct encoding.
+      const title = entry.wikipediaTitle || "Wikipedia";
       parts.push(
-        `<a href="https://en.wikipedia.org/wiki/${encodeURIComponent(wp)}" target="_blank" rel="noreferrer">Wikipedia</a>`,
+        `<a href="${entry.wikipediaUrl}" target="_blank" rel="noreferrer">${escapeHtml(title)}</a>`,
       );
     }
     footerEl.innerHTML = parts.join(" · ");

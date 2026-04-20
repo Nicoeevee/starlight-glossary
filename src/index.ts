@@ -1,6 +1,6 @@
 import type { StarlightPlugin } from "@astrojs/starlight/types";
 import { fileURLToPath } from "node:url";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import remarkGlossary, {
   defaultSlugify,
@@ -57,7 +57,7 @@ export default function starlightGlossary(
   const wikipediaBase = options.wikipediaBase ?? "https://en.wikipedia.org/wiki/";
   const autoTagMode: AutoTagMode = options.autoTag?.mode ?? "first";
   const discoveryEnabled = options.discovery?.enabled ?? true;
-  const lintEnabled = options.lint?.enabled ?? false;
+  const lintEnabled = options.lint?.enabled ?? true;
   const lintMinOccurrences = options.lint?.minOccurrences ?? 3;
 
   return {
@@ -71,6 +71,102 @@ export default function starlightGlossary(
           ],
         });
 
+        // Shared state between the integration's setup and finalize hooks.
+        // Captured here so both config:setup and build:done close over the
+        // same references/candidate maps populated during remark passes.
+        const references: GlossaryReference[] = [];
+        const aliasCandidates = new Map<string, Set<string>>();
+        let indexPath = "";
+        let cachePath = "";
+        let indexRef!: GlossaryIndex;
+        let cacheRef!: GlossaryCache;
+        let lintCollector: ReturnType<typeof createLintCollector> | null = null;
+
+        const finalize = async () => {
+          let mutated = false;
+
+          // Promote alias candidates onto existing entries.
+          for (const [slug, labels] of aliasCandidates) {
+            const entry = indexRef.terms[slug];
+            if (!entry) continue;
+            for (const label of labels) {
+              if (label === slug) continue;
+              if (!entry.aliases.includes(label)) {
+                entry.aliases.push(label);
+                mutated = true;
+                logger.info(
+                  `auto-promoted "${label}" as alias of "${entry.term}"`,
+                );
+              }
+            }
+          }
+
+          // Discover missing slugs via Wikipedia.
+          if (discoveryEnabled) {
+            const missing = new Map<string, UnresolvedReference>();
+            for (const ref of references) {
+              if (indexRef.terms[ref.slug]) continue;
+              const existing = missing.get(ref.slug);
+              if (existing) {
+                if (!existing.locations.includes(ref.label))
+                  existing.locations.push(ref.label);
+              } else {
+                missing.set(ref.slug, {
+                  slug: ref.slug,
+                  label: ref.label,
+                  locations: [ref.label],
+                });
+              }
+            }
+            if (missing.size > 0) {
+              logger.info(
+                `discovering ${missing.size} new term(s) via Wikipedia…`,
+              );
+              const report = await discoverMissingTerms(
+                Array.from(missing.values()),
+                indexRef,
+                cacheRef,
+                logger,
+              );
+              if (report.added.length > 0) mutated = true;
+            }
+          }
+
+          if (mutated) {
+            cacheRef.fetchedAt = new Date().toISOString();
+            await writeJsonAtomic(indexPath, indexRef);
+            await writeJsonAtomic(cachePath, cacheRef);
+            logger.info(`saved updates to ${indexFile} + ${cacheFile}`);
+          }
+
+          if (lintEnabled && lintCollector) {
+            const findings = lintCollector.findings();
+            if (findings.length > 0) {
+              logger.info(
+                `lint: ${findings.length} term(s) appear ≥${lintMinOccurrences}× without a glossary entry:`,
+              );
+              for (const f of findings.slice(0, 20)) {
+                logger.info(`  · "${f.term}" (${f.occurrences}× · ${f.kind})`);
+              }
+              if (findings.length > 20) {
+                logger.info(
+                  `  … and ${findings.length - 20} more (see .astro/glossary-lint.md)`,
+                );
+              }
+              const reportPath = path.join(
+                path.dirname(indexPath),
+                ".astro/glossary-lint.md",
+              );
+              await mkdir(path.dirname(reportPath), { recursive: true });
+              await writeFile(reportPath, renderLintReport(findings), "utf8");
+            } else {
+              logger.info(
+                "lint: every candidate term is already in the glossary",
+              );
+            }
+          }
+        };
+
         addIntegration({
           name: "starlight-glossary/integration",
           hooks: {
@@ -83,8 +179,8 @@ export default function starlightGlossary(
               } = astroCtx;
 
               const root = fileURLToPath(astroConfig.root);
-              const indexPath = path.join(root, indexFile);
-              const cachePath = path.join(root, cacheFile);
+              indexPath = path.join(root, indexFile);
+              cachePath = path.join(root, cacheFile);
 
               const context: ProjectContext = { routePrefix, wikipediaBase };
               const { index, cache } = await loadGlossaryFiles(
@@ -92,12 +188,11 @@ export default function starlightGlossary(
                 cachePath,
                 logger,
               );
+              indexRef = index;
+              cacheRef = cache;
               const data = joinGlossary(index, cache, context);
               const knownSlugs = new Set(Object.keys(data.terms));
 
-              // Collect references + alias candidates seen during remark pass.
-              const references: GlossaryReference[] = [];
-              const aliasCandidates = new Map<string, Set<string>>();
               const onReference = (ref: GlossaryReference) => {
                 references.push(ref);
                 if (ref.label && ref.label !== ref.slug) {
@@ -108,7 +203,7 @@ export default function starlightGlossary(
                 }
               };
 
-              const lint = createLintCollector({
+              lintCollector = createLintCollector({
                 enabled: lintEnabled,
                 minOccurrences: lintMinOccurrences,
                 data,
@@ -132,7 +227,7 @@ export default function starlightGlossary(
                       remarkAutoTag,
                       { mode: autoTagMode, routePrefix, data },
                     ],
-                    lint.remarkPlugin(),
+                    lintCollector.remarkPlugin,
                   ],
                 },
                 vite: {
@@ -166,99 +261,9 @@ export default function starlightGlossary(
                 "page",
                 `import ${JSON.stringify(path.join(here, "client/tooltip.js"))};`,
               );
-
-              // At end of build, reconcile discoveries + alias promotions +
-              // lint findings, write files atomically.
-              astroCtx.addWatchFile?.(indexPath);
-              astroCtx.addWatchFile?.(cachePath);
-
-              const finalize = async () => {
-                let mutated = false;
-
-                // Promote alias candidates onto existing entries.
-                for (const [slug, labels] of aliasCandidates) {
-                  const entry = index.terms[slug];
-                  if (!entry) continue;
-                  for (const label of labels) {
-                    if (label === slug) continue;
-                    if (!entry.aliases.includes(label)) {
-                      entry.aliases.push(label);
-                      mutated = true;
-                      logger.info(
-                        `glossary: auto-promoted "${label}" as alias of "${entry.term}"`,
-                      );
-                    }
-                  }
-                }
-
-                // Discover missing slugs via Wikipedia.
-                if (discoveryEnabled) {
-                  const missing = new Map<string, UnresolvedReference>();
-                  for (const ref of references) {
-                    if (index.terms[ref.slug]) continue;
-                    const existing = missing.get(ref.slug);
-                    if (existing) {
-                      if (!existing.locations.includes(ref.label))
-                        existing.locations.push(ref.label);
-                    } else {
-                      missing.set(ref.slug, {
-                        slug: ref.slug,
-                        label: ref.label,
-                        locations: [ref.label],
-                      });
-                    }
-                  }
-                  if (missing.size > 0) {
-                    logger.info(
-                      `glossary: discovering ${missing.size} new term(s) via Wikipedia…`,
-                    );
-                    const report = await discoverMissingTerms(
-                      Array.from(missing.values()),
-                      index,
-                      cache,
-                      logger,
-                    );
-                    if (report.added.length > 0) mutated = true;
-                  }
-                }
-
-                if (mutated) {
-                  cache.fetchedAt = new Date().toISOString();
-                  await writeJsonAtomic(indexPath, index);
-                  await writeJsonAtomic(cachePath, cache);
-                  logger.info(
-                    `glossary: saved updates to ${indexFile} + ${cacheFile}`,
-                  );
-                }
-
-                if (lintEnabled) {
-                  const findings = lint.findings();
-                  if (findings.length > 0) {
-                    const out = path.join(root, ".astro/glossary-lint.md");
-                    await writeJsonAtomic(out, renderLintReport(findings));
-                    logger.info(
-                      `glossary: lint report → ${out} (${findings.length} candidate(s))`,
-                    );
-                  }
-                }
-              };
-
-              // Hook finalize into the astro:build:done signal. Dev mode
-              // doesn't fire build:done on every edit, so we also finalize
-              // after the first full dev prerender — but in practice the
-              // dev server keeps references accumulating across reloads,
-              // so we debounce writes.
-              addIntegration({
-                name: "starlight-glossary/finalize",
-                hooks: {
-                  "astro:build:done": finalize,
-                  "astro:server:done": finalize,
-                },
-              } as unknown as never);
-
-              // Re-expose for callers using addIntegration pattern:
-              void addIntegration;
             },
+            "astro:build:done": finalize,
+            "astro:server:done": finalize,
           },
         });
 

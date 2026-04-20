@@ -4,6 +4,7 @@
 // module injected by the plugin.
 import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
 import { glossaryData } from "virtual:starlight-glossary/data";
+import { buildWikipediaUrl, prettifyWikipediaTitle } from "../url";
 
 const { terms, context } = glossaryData;
 
@@ -60,11 +61,11 @@ const headings = primaries.map((e) => ({
           {entry.wikipedia && (
             <p>
               <a
-                href={`${context.wikipediaBase}${entry.wikipedia.replace(/ /g, "_")}`}
+                href={buildWikipediaUrl(context.wikipediaBase, entry.wikipedia)}
                 target="_blank"
                 rel="noreferrer"
               >
-                Wikipedia: {entry.wikipedia.replace(/_/g, " ")}
+                Wikipedia: {prettifyWikipediaTitle(entry.wikipedia)}
               </a>
             </p>
           )}
@@ -79,11 +80,11 @@ const headings = primaries.map((e) => ({
               {kid.wikipedia && (
                 <p>
                   <a
-                    href={`${context.wikipediaBase}${kid.wikipedia.replace(/ /g, "_")}`}
+                    href={buildWikipediaUrl(context.wikipediaBase, kid.wikipedia)}
                     target="_blank"
                     rel="noreferrer"
                   >
-                    Wikipedia: {kid.wikipedia.replace(/_/g, " ")}
+                    Wikipedia: {prettifyWikipediaTitle(kid.wikipedia)}
                   </a>
                 </p>
               )}

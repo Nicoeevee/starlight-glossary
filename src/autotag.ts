@@ -16,15 +16,9 @@ export interface AutoTagOptions {
 //     entries, matched exactly.
 //
 // Match on word boundaries so "HTTP" doesn't grab "HTTPS". Inside each text
-// node, we walk matches left-to-right and wrap them in tagged anchors. In
-// "first" mode, each slug is emitted at most once per page (state lives on
-// a file-level tracker the caller supplies — see the astro plugin hook).
-
-interface MatcherEntry {
-  slug: string;
-  variants: string[];
-  caseSensitive: boolean;
-}
+// node, we walk matches left-to-right and split the node on the parent into
+// a sequence of `text` + `link` children. This works for both .md and .mdx
+// sources (raw HTML nodes would break the MDX pipeline).
 
 export function buildMatcher(data: GlossaryData): {
   caseSensitiveRe: RegExp | null;
@@ -52,22 +46,58 @@ export function buildMatcher(data: GlossaryData): {
   cs.sort((a, b) => b.length - a.length);
   ci.sort((a, b) => b.length - a.length);
 
-  // `\b` in JS regex is ASCII-only; acceptable for our English-only corpus.
   const csRe = cs.length ? new RegExp(`\\b(?:${cs.join("|")})\\b`, "g") : null;
   const ciRe = ci.length ? new RegExp(`\\b(?:${ci.join("|")})\\b`, "gi") : null;
   return { caseSensitiveRe: csRe, caseInsensitiveRe: ciRe, aliasToSlug, aliasToSlugCi };
 }
 
-export interface AutoTagContext {
+interface AutoTagContext {
   matcher: ReturnType<typeof buildMatcher>;
   mode: AutoTagMode;
   routePrefix: string;
-  /** Slugs tagged earlier in the same document (used for `mode: "first"`). */
   tagged: Set<string>;
 }
 
-/** Remark plugin that auto-tags alias matches in text nodes, respecting
- *  code/heading/link context and the first-per-page rule. */
+interface TextNode {
+  type: "text";
+  value: string;
+}
+
+interface LinkNode {
+  type: "link";
+  url: string;
+  data: {
+    hProperties: Record<string, string>;
+  };
+  children: TextNode[];
+}
+
+type UnistParent = {
+  type: string;
+  children: (TextNode | LinkNode | { type: string })[];
+};
+
+interface Match {
+  start: number;
+  end: number;
+  slug: string;
+}
+
+// Allow-list of parent node types where it's safe to tag text. Narrow on
+// purpose — MDX trees contain node types we don't understand, and only
+// standard markdown inline containers are guaranteed to survive our
+// `text`-to-`html` rewrite.
+const SAFE_PARENT_TYPES = new Set([
+  "paragraph",
+  "listItem",
+  "emphasis",
+  "strong",
+  "blockquote",
+  "delete",
+  "tableCell",
+  "footnoteDefinition",
+]);
+
 export function remarkAutoTag(opts: AutoTagOptions) {
   return function transformer(tree: unknown) {
     if (opts.mode === "off") return;
@@ -78,83 +108,62 @@ export function remarkAutoTag(opts: AutoTagOptions) {
       routePrefix: opts.routePrefix,
       tagged: new Set(),
     };
+
+    // Rewrite each matching text node in-place to an `html` node. This
+    // avoids splicing on the parent (which trips up MDX's AST processing)
+    // while still producing tagged anchors in the rendered output. HTML
+    // nodes are valid in both mdast and the MDX pipeline.
     visit(
       tree as Parameters<typeof visit>[0],
-      (node: unknown) => {
-        const n = node as { type: string };
-        // Skip entire subtrees where tagging is unwanted.
-        if (
-          n.type === "code" ||
-          n.type === "inlineCode" ||
-          n.type === "heading" ||
-          n.type === "link" ||
-          n.type === "linkReference"
-        ) {
-          return SKIP;
+      "text",
+      (node, _index, parent) => {
+        if (!parent) return;
+        const p = parent as unknown as { type: string };
+        if (!SAFE_PARENT_TYPES.has(p.type)) return;
+
+        const n = node as unknown as TextNode;
+        const text = n.value;
+        const matches = findMatches(text, ctx);
+        if (matches.length === 0) return;
+
+        // Build HTML string: escape non-match text, wrap matches in <a>.
+        const chunks: string[] = [];
+        let cursor = 0;
+        for (const m of matches) {
+          if (m.start > cursor) {
+            chunks.push(escapeHtml(text.slice(cursor, m.start)));
+          }
+          const displayed = text.slice(m.start, m.end);
+          chunks.push(
+            `<a href="${ctx.routePrefix}#${escapeAttr(m.slug)}" ` +
+              `data-glossary-term="${escapeAttr(m.slug)}" ` +
+              `class="sl-glossary-term sl-glossary-term--auto">${escapeHtml(displayed)}</a>`,
+          );
+          cursor = m.end;
         }
-        if (n.type !== "text") return;
-        tagTextNode(n as TextNode, ctx);
+        if (cursor < text.length) {
+          chunks.push(escapeHtml(text.slice(cursor)));
+        }
+
+        // Convert the text node in-place. `html` is a valid mdast node type
+        // and the MDX pipeline treats it as raw HTML passthrough.
+        const mutable = node as unknown as { type: string; value: string };
+        mutable.type = "html";
+        mutable.value = chunks.join("");
       },
     );
   };
 }
 
-interface TextNode {
-  type: "text";
-  value: string;
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-function tagTextNode(node: TextNode, ctx: AutoTagContext): void {
-  const value = node.value;
-  if (!value) return;
-
-  const replacements = findMatches(value, ctx);
-  if (replacements.length === 0) return;
-
-  // Rebuild this text node as a sequence of text + link children on its
-  // parent. Since unist-util-visit doesn't expose the parent directly, we
-  // mutate in place by turning the text node into a paragraph-ish sequence:
-  // unfortunately mdast `text` has no children, so we approximate by using
-  // HTML passthrough (rehype node type `html`) for the anchor. That keeps
-  // the AST valid and renders correctly through the Starlight pipeline.
-  const parts: Array<
-    | { type: "text"; value: string }
-    | { type: "html"; value: string }
-  > = [];
-  let cursor = 0;
-  for (const m of replacements) {
-    if (m.start > cursor) {
-      parts.push({ type: "text", value: value.slice(cursor, m.start) });
-    }
-    const displayed = value.slice(m.start, m.end);
-    parts.push({
-      type: "html",
-      value:
-        `<a href="${ctx.routePrefix}#${escapeHtml(m.slug)}" ` +
-        `data-glossary-term="${escapeHtml(m.slug)}" ` +
-        `class="sl-glossary-term sl-glossary-term--auto">${escapeHtml(displayed)}</a>`,
-    });
-    cursor = m.end;
-  }
-  if (cursor < value.length) {
-    parts.push({ type: "text", value: value.slice(cursor) });
-  }
-
-  // Replace node contents by mutating to the first part and splicing the
-  // rest in via a tiny hack: use a special `children` array on the node,
-  // detected by a parent-aware pass below. The simpler path is replacing
-  // `node.value` with a single HTML chunk that preserves text too.
-  const combined = parts
-    .map((p) => (p.type === "text" ? escapeHtml(p.value) : p.value))
-    .join("");
-  (node as unknown as { type: string; value: string }).type = "html";
-  (node as unknown as { type: string; value: string }).value = combined;
-}
-
-interface Match {
-  start: number;
-  end: number;
-  slug: string;
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
 function findMatches(text: string, ctx: AutoTagContext): Match[] {
@@ -170,7 +179,6 @@ function findMatches(text: string, ctx: AutoTagContext): Match[] {
       if (!slug) continue;
       if (ctx.mode === "first" && ctx.tagged.has(slug)) continue;
       matches.push({ start: m.index, end: m.index + m[0].length, slug });
-      ctx.tagged.add(slug);
     }
   }
   if (caseInsensitiveRe) {
@@ -179,7 +187,7 @@ function findMatches(text: string, ctx: AutoTagContext): Match[] {
     while ((m = caseInsensitiveRe.exec(text)) !== null) {
       const slug = aliasToSlugCi.get(m[0].toLowerCase());
       if (!slug) continue;
-      // Skip if the case-sensitive pass already matched this span.
+      // Skip if a case-sensitive match already covers this span.
       if (
         matches.some(
           (x) => x.start < m!.index + m![0].length && x.end > m!.index,
@@ -189,18 +197,17 @@ function findMatches(text: string, ctx: AutoTagContext): Match[] {
       }
       if (ctx.mode === "first" && ctx.tagged.has(slug)) continue;
       matches.push({ start: m.index, end: m.index + m[0].length, slug });
-      ctx.tagged.add(slug);
     }
   }
 
   matches.sort((a, b) => a.start - b.start);
-  // Drop overlaps (longer-match-wins is implicit from the alias sort).
   const out: Match[] = [];
   let last = -1;
   for (const m of matches) {
     if (m.start >= last) {
       out.push(m);
       last = m.end;
+      if (ctx.mode === "first") ctx.tagged.add(m.slug);
     }
   }
   return out;
@@ -208,13 +215,4 @@ function findMatches(text: string, ctx: AutoTagContext): Match[] {
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }

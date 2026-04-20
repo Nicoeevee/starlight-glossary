@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { GlossaryEntry, GlossaryIndex } from "./data.js";
+import { buildWikipediaUrl } from "./url.js";
 
 // Source-level transforms for raw markdown output (e.g. `.md` API endpoints,
 // llms.txt generators). Reads glossary.json directly — no dependency on the
@@ -60,7 +61,7 @@ export function resolveGlossaryLinks(
   const rewrite = (_m: string, label: string, slug: string) => {
     const entry = glossary.get(slug);
     const href = entry?.wikipedia
-      ? `${wikipediaBase}${entry.wikipedia.replace(/ /g, "_")}`
+      ? buildWikipediaUrl(wikipediaBase, entry.wikipedia)
       : fallback(slug);
     return `[${label}](${href})`;
   };

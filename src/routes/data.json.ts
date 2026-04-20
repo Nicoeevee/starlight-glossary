@@ -1,9 +1,14 @@
 // Build-time JSON endpoint that serves a compact map for the client tooltip.
 // Shape:
-//   { [slug]: { term, aliases, html, wikipedia } }
-// `html` is the cached Wikipedia extract (or `definition` when overridden).
+//   { [slug]: { term, aliases, html, wikipedia, wikipediaUrl, wikipediaTitle } }
+// - `term`: author's preferred display name (from glossary.json)
+// - `html`: cached Wikipedia extract, or `definition` override when set
+// - `wikipedia`: raw slug, e.g. "Transport_Layer_Security#TLS_1.3"
+// - `wikipediaUrl`: fully-built URL for the "Read on Wikipedia" link
+// - `wikipediaTitle`: human-readable form for display, e.g. "Transport Layer Security › TLS 1.3"
 import type { APIRoute } from "astro";
 import { glossaryData } from "virtual:starlight-glossary/data";
+import { buildWikipediaUrl, prettifyWikipediaTitle } from "../url";
 
 export const prerender = true;
 
@@ -17,6 +22,7 @@ export const GET: APIRoute = async () => {
       html: string;
       wikipedia?: string;
       wikipediaUrl?: string;
+      wikipediaTitle?: string;
     }
   > = {};
 
@@ -31,7 +37,10 @@ export const GET: APIRoute = async () => {
       html,
       wikipedia: entry.wikipedia ?? undefined,
       wikipediaUrl: entry.wikipedia
-        ? `${context.wikipediaBase}${entry.wikipedia.replace(/ /g, "_")}`
+        ? buildWikipediaUrl(context.wikipediaBase, entry.wikipedia)
+        : undefined,
+      wikipediaTitle: entry.wikipedia
+        ? prettifyWikipediaTitle(entry.wikipedia)
         : undefined,
     };
   }
