@@ -95,6 +95,16 @@ export interface StarlightGlossaryOptions {
      *  fetch errors are logged and the term stays in the lint report.
      *  Closes the loop: write prose → build → glossary grows itself. */
     autoDiscover?: boolean;
+    /** Map of acronym → expanded form. When auto-discover fails for an
+     *  acronym (disambiguation page, 404, or fetch error) and that
+     *  acronym is in this map, the plugin retries the Wikipedia query
+     *  with the expansion (e.g. "JWKS" → "JSON Web Key Set"). Useful
+     *  for short acronyms that hit Wikipedia disambiguation pages
+     *  ("AES" → "Advanced Encryption Standard") or that have no
+     *  dedicated article ("JWKS" → stub entry with the expansion as
+     *  term + the acronym as alias, ready for you to fill in
+     *  `definition`). Only applied when `autoDiscover` is true. */
+    acronymExpansions?: Record<string, string>;
     /** Default: `false`. When true, throws at end of build if any
      *  findings remain. Use in CI to enforce "no new untagged acronyms
      *  or repeated proper nouns slip through". */
@@ -124,6 +134,7 @@ export default function starlightGlossary(
   const lintMinOccurrences = options.lint?.minOccurrences ?? 3;
   const lintIgnore = options.lint?.ignore ?? [];
   const lintAutoDiscover = options.lint?.autoDiscover ?? false;
+  const lintAcronymExpansions = options.lint?.acronymExpansions ?? {};
   const lintFailOnFindings = options.lint?.failOnFindings ?? false;
 
   return {
@@ -247,14 +258,23 @@ export default function starlightGlossary(
 
           let autoDiscovered: string[] = [];
           let autoDiscoverFailed: Array<{ term: string; reason: string }> = [];
+          let autoStubbed: Array<{ slug: string; term: string; acronym: string }> = [];
           let remainingFindings = lintCollector?.findings() ?? [];
 
           // Auto-discover lint findings via Wikipedia when requested.
-          // Each finding is submitted to discoverMissingTerms; successes
-          // are removed from the remaining lint list and reported with
-          // their Wikipedia title/description/URL so the user can audit.
-          // Failures (disambiguation, 404, fetch errors) stay in the
-          // lint report with a reason.
+          // Three-stage cascade:
+          //   1. Submit each finding to discovery using the term as the
+          //      Wikipedia hint. Unambiguous hits land in glossary.json.
+          //   2. For acronyms that disambiguated/404'd AND have an
+          //      entry in `lint.acronymExpansions`, retry with the
+          //      expansion as the Wikipedia hint. Often resolves
+          //      (e.g. "AES" disambiguates → "Advanced Encryption
+          //      Standard" lands cleanly).
+          //   3. If the expansion ALSO fails to find a Wikipedia
+          //      article, create a stub entry with the expansion as the
+          //      term and the acronym as the alias, with a null
+          //      `definition` ready for the user to fill in. (Skipped
+          //      if no expansion was configured.)
           if (
             lintEnabled &&
             lintCollector &&
@@ -267,15 +287,12 @@ export default function starlightGlossary(
               (f) => ({
                 slug: slugify(f.term),
                 label: f.term,
-                // Use the term itself as the Wikipedia article hint.
-                // Acronyms like "SSH" are resolved via Wikipedia redirects
-                // ("Secure Shell"); proper nouns usually match directly.
                 article: f.term,
                 locations: [`lint: ${f.occurrences}× (${f.kind})`],
               }),
             );
             logger.info(
-              `lint.autoDiscover: submitting ${unresolved.length} finding(s) to Wikipedia…`,
+              `━━━ lint.autoDiscover: submitting ${unresolved.length} finding(s) to Wikipedia ━━━`,
             );
             const before = new Set(Object.keys(indexRef.terms));
             const report = await discoverMissingTerms(
@@ -286,38 +303,106 @@ export default function starlightGlossary(
               wikipedia,
             );
             if (report.added.length > 0) mutated = true;
-            autoDiscovered = report.added;
+            autoDiscovered = [...report.added];
             const addedSet = new Set(report.added);
-            // Build failure reasons so the lint report can show why
-            // each term wasn't auto-added.
-            for (const slug of report.errored) {
-              const label =
-                unresolved.find((u) => u.slug === slug)?.label ?? slug;
-              autoDiscoverFailed.push({ term: label, reason: "fetch failed" });
-            }
-            for (const slug of report.missing) {
-              const label =
-                unresolved.find((u) => u.slug === slug)?.label ?? slug;
-              autoDiscoverFailed.push({
-                term: label,
-                reason: "no matching Wikipedia article",
+
+            // Stage 2 — retry failures with their configured expansion.
+            const failedSlugs = new Set([
+              ...report.ambiguous,
+              ...report.missing,
+              ...report.errored,
+            ]);
+            const retryCandidates: UnresolvedReference[] = [];
+            const retryExpansionByLabel = new Map<string, string>();
+            for (const u of unresolved) {
+              if (!failedSlugs.has(u.slug)) continue;
+              const expansion = lintAcronymExpansions[u.label];
+              if (!expansion) continue;
+              retryCandidates.push({
+                slug: u.slug,
+                label: u.label,
+                article: expansion,
+                locations: u.locations,
               });
+              retryExpansionByLabel.set(u.label, expansion);
             }
-            for (const slug of report.ambiguous) {
-              const label =
-                unresolved.find((u) => u.slug === slug)?.label ?? slug;
-              autoDiscoverFailed.push({
-                term: label,
-                reason: "Wikipedia disambiguation page",
-              });
-            }
-            // Print a per-term summary with the info users need to
-            // confirm the match at a glance.
-            if (report.added.length > 0) {
+            let retryReport: { added: string[]; ambiguous: string[]; missing: string[]; errored: string[] } = {
+              added: [],
+              ambiguous: [],
+              missing: [],
+              errored: [],
+            };
+            if (retryCandidates.length > 0) {
               logger.info(
-                `lint.autoDiscover: auto-added ${report.added.length} term(s):`,
+                `lint.autoDiscover: retrying ${retryCandidates.length} term(s) with configured expansion…`,
               );
-              for (const slug of report.added) {
+              retryReport = await discoverMissingTerms(
+                retryCandidates,
+                indexRef,
+                cacheRef,
+                logger,
+                wikipedia,
+              );
+              if (retryReport.added.length > 0) {
+                mutated = true;
+                for (const slug of retryReport.added) {
+                  autoDiscovered.push(slug);
+                  addedSet.add(slug);
+                }
+              }
+            }
+
+            // Stage 3 — for acronyms that STILL failed (after expansion
+            // retry) and have an expansion configured, create a stub
+            // entry. The user fills in `definition`; everything else is
+            // pre-populated from the expansion.
+            const stillFailed = new Set([
+              ...retryReport.ambiguous,
+              ...retryReport.missing,
+              ...retryReport.errored,
+            ]);
+            for (const u of retryCandidates) {
+              if (!stillFailed.has(u.slug)) continue;
+              if (indexRef.terms[u.slug]) continue;
+              const expansion = retryExpansionByLabel.get(u.label);
+              if (!expansion) continue;
+              indexRef.terms[u.slug] = {
+                term: expansion,
+                aliases: [u.label, expansion],
+                wikipedia: null,
+                caseSensitive: /^[A-Z0-9]{2,6}$/.test(u.label),
+                definition: null,
+                groupWith: null,
+              };
+              autoStubbed.push({ slug: u.slug, term: expansion, acronym: u.label });
+              addedSet.add(u.slug);
+              mutated = true;
+            }
+
+            // Build final failure list: anything that wasn't added,
+            // wasn't successfully retried, and didn't get a stub.
+            const finallyFailed = new Set([
+              ...failedSlugs,
+            ]);
+            for (const slug of retryReport.added) finallyFailed.delete(slug);
+            for (const s of autoStubbed) finallyFailed.delete(s.slug);
+            for (const u of unresolved) {
+              if (!finallyFailed.has(u.slug)) continue;
+              const reason =
+                report.errored.includes(u.slug) || retryReport.errored.includes(u.slug)
+                  ? "fetch failed"
+                  : report.missing.includes(u.slug) || retryReport.missing.includes(u.slug)
+                  ? "no matching Wikipedia article"
+                  : "Wikipedia disambiguation page";
+              autoDiscoverFailed.push({ term: u.label, reason });
+            }
+
+            // Per-term summary in the build log.
+            if (autoDiscovered.length > 0) {
+              logger.info(
+                `lint.autoDiscover: auto-added ${autoDiscovered.length} term(s):`,
+              );
+              for (const slug of autoDiscovered) {
                 if (before.has(slug)) continue;
                 const entry = indexRef.terms[slug];
                 const cached = cacheRef.terms[slug];
@@ -328,6 +413,14 @@ export default function starlightGlossary(
                 if (url) logger.info(`    ${url}`);
               }
             }
+            if (autoStubbed.length > 0) {
+              logger.info(
+                `lint.autoDiscover: created ${autoStubbed.length} stub entry/entries (no Wikipedia article — fill in definition):`,
+              );
+              for (const s of autoStubbed) {
+                logger.info(`  · ${s.acronym} → "${s.term}" (slug ${s.slug})`);
+              }
+            }
             if (autoDiscoverFailed.length > 0) {
               logger.info(
                 `lint.autoDiscover: ${autoDiscoverFailed.length} term(s) could not be auto-added:`,
@@ -336,8 +429,10 @@ export default function starlightGlossary(
                 logger.info(`  · "${f.term}" — ${f.reason}`);
               }
             }
-            // Strip auto-added terms from the remaining findings so the
-            // lint report doesn't list them as still-untagged.
+            logger.info(`━━━ lint.autoDiscover: done ━━━`);
+
+            // Strip everything we handled (added or stubbed) from the
+            // remaining findings.
             remainingFindings = remainingFindings.filter(
               (f) => !addedSet.has(slugify(f.term)),
             );
@@ -373,13 +468,15 @@ export default function starlightGlossary(
                 renderLintReport(remainingFindings, {
                   autoDiscovered: autoDiscovered.map((slug) => {
                     const cached = cacheRef.terms[slug];
+                    const entry = indexRef.terms[slug];
                     return {
                       slug,
-                      title: cached?.title ?? slug,
+                      title: cached?.title ?? entry?.term ?? slug,
                       description: cached?.description ?? "",
                       url: cached?.url ?? "",
                     };
                   }),
+                  autoStubbed,
                   autoDiscoverFailed,
                 }),
                 "utf8",
@@ -615,6 +712,19 @@ export default function starlightGlossary(
               });
 
               const existing = astroConfig.markdown?.remarkPlugins ?? [];
+              // Order matters:
+              //   1. remarkGlossary — explicit `[label](glossary:slug)` links
+              //      become anchor nodes (mdast type "link"). Lint already
+              //      skips link nodes so this doesn't pollute the count.
+              //   2. lintCollector — counts untagged candidates while text
+              //      nodes are still text. Must run BEFORE autotag, because
+              //      autotag converts entire text-node values into html
+              //      nodes (which lint then skips), hiding any non-match
+              //      neighbors of an autotagged term from the count.
+              //      Running lint first makes counts deterministic
+              //      regardless of how many glossary entries already exist.
+              //   3. remarkAutoTag — wraps plain-text matches in anchors,
+              //      converting text → html along the way.
               updateConfig({
                 markdown: {
                   remarkPlugins: [
@@ -623,11 +733,11 @@ export default function starlightGlossary(
                       remarkGlossary,
                       { routePrefix, knownSlugs, redirects, onReference },
                     ],
+                    lintCollector.remarkPlugin,
                     [
                       remarkAutoTag,
                       { mode: autoTagMode, routePrefix, data },
                     ],
-                    lintCollector.remarkPlugin,
                   ],
                 },
                 vite: {

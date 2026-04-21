@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-04-20
+
+### Fixed
+
+- **Lint now sees text hidden by autotag.** Lint was running *after* autotag, which mutates entire text-node values into HTML nodes. Lint correctly skips HTML nodes — but as a side effect, every plain word that happened to share a paragraph with an autotagged term was invisible to lint. Result: the more glossary entries you had, the more lint candidates you couldn't see. Reordering the remark pipeline (lint between explicit-link and autotag) makes lint see the original text every time. Counts are now deterministic regardless of glossary state. Side effect: existing consumers will see *more* lint findings on the next build — those are real terms that were silently hidden.
+
+### Added
+
+- **`lint.acronymExpansions`** option. Map of acronym → expanded form. When auto-discover fails for an acronym (disambiguation page, 404, or fetch error) and the acronym has a configured expansion, the plugin retries the Wikipedia query with the expansion (e.g. `"AES"` → `"Advanced Encryption Standard"`). If the expansion ALSO fails, a *stub* entry is created with the expansion as the term and the acronym as an alias, ready for the user to fill in `definition` manually. Useful for acronyms with no dedicated Wikipedia article (`SOPS`, `JWKS`, …) that you still want to spell out.
+- **Auto-stubbed report section.** `.astro/glossary-lint.md` now has a fourth section listing terms that became stub entries — separate from auto-added (real Wikipedia hits) and failed (still need attention).
+- **Visual separators in the build log.** `━━━ lint.autoDiscover: submitting N finding(s) ━━━` / `━━━ lint.autoDiscover: done ━━━` make the auto-discover phase impossible to miss in CI logs.
+
 ## [1.2.0] — 2026-04-20
 
 ### Added

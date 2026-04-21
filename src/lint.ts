@@ -212,6 +212,10 @@ export interface RenderLintReportExtras {
    *  is enabled). Rendered as a separate section so the user can audit
    *  what the plugin committed on their behalf. */
   autoDiscovered?: AutoDiscoveredTerm[];
+  /** Stub entries created from `lint.acronymExpansions` when no
+   *  Wikipedia article was found. Each has the expanded form as the
+   *  term and a null `definition` waiting for the user to fill in. */
+  autoStubbed?: Array<{ slug: string; term: string; acronym: string }>;
   /** Terms submitted to auto-discover but rejected (disambiguation,
    *  404, or fetch error). Kept separately so the user can either add
    *  them manually with a disambiguated article hint or suppress them
@@ -241,6 +245,24 @@ export function renderLintReport(
       const link = t.url ? `[${t.title}](${t.url})` : t.title;
       const desc = t.description.replace(/\|/g, "\\|");
       sections.push(`| \`${t.slug}\` | ${desc || "—"} | ${link} |`);
+    }
+    sections.push("");
+  }
+
+  if (extras.autoStubbed && extras.autoStubbed.length > 0) {
+    sections.push(
+      "# Auto-stubbed (no Wikipedia article)",
+      "",
+      "These acronyms had a configured expansion in `lint.acronymExpansions`",
+      "but no matching Wikipedia article. A stub entry was created with the",
+      "expansion as the `term` and the acronym as an alias. Fill in",
+      "`definition` in `glossary.json` to complete each stub.",
+      "",
+      "| Acronym | Stub term | Slug |",
+      "|---|---|---|",
+    );
+    for (const s of extras.autoStubbed) {
+      sections.push(`| \`${s.acronym}\` | ${s.term} | \`${s.slug}\` |`);
     }
     sections.push("");
   }
