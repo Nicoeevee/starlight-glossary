@@ -89,6 +89,9 @@ Each entry in `glossary.json` under `terms[slug]`:
 | `caseSensitive` | boolean | If `true`, auto-tag only matches exact case (good for acronyms: `TLS` not `tls`). |
 | `definition` | string \| null | Custom tooltip body that overrides the cached Wikipedia extract. |
 | `groupWith` | string \| null | Slug of another entry. When set, this entry renders as a nested sub-section under the parent on `/glossary` (useful for variants like `tls-1-3` grouped under `tls`). |
+| `mergedInto` | string \| null \| absent | Set automatically by the reconcile pass when this entry is folded into a canonical entry. Old slugs still forward at render time. Hand-editing not usually necessary. |
+| `aliasFragments` | object | Map of alias-text → Wikipedia fragment. Populated automatically when docs reference the entry with `glossary:Article#Section` syntax. Subsequent mentions of that label get the fragment-aware Wikipedia link. |
+| `wikipediaRedirectAcknowledged` | string \| null | Acknowledge that you intentionally point this entry at a Wikipedia article whose canonical title differs from `term`. Set to the cached Wikipedia title to silence the "term differs from Wikipedia" warning until that title changes again. |
 
 ### Sub-sections and fragments
 
@@ -136,6 +139,33 @@ starlightGlossary({
     enabled: true,
   },
 
+  wikipedia: {
+    // Set to false for offline / air-gapped builds. No network calls;
+    // tooltips render whatever is already in glossary-cache.json.
+    enabled: true,
+    // When true, any Wikipedia fetch error fails the build. Recommended
+    // for CI so you find out about connectivity issues early.
+    strict: false,
+    // Per-request timeout in ms. Hitting the timeout retries with backoff.
+    timeoutMs: 10_000,
+  },
+
+  reconcile: {
+    // Set to false to disable Wikipedia-redirect-based merge/rename
+    // entirely (cache fill still runs).
+    enabled: true,
+    // Set to true to *preview* what reconcile would do without
+    // modifying glossary.json, glossary-cache.json, or any doc files.
+    // The build log shows "[dry-run] would merge / would adopt …" so
+    // you can audit before opting in.
+    dryRun: false,
+    // When false, merges still happen in glossary.json (the source
+    // becomes a mergedInto stub) but [label](glossary:old-slug)
+    // references in src/content/docs/ are NOT rewritten. Doc links
+    // continue to resolve through the stub at render time.
+    rewriteDocRefs: true,
+  },
+
   lint: {
     // When true (default), the build logs untagged ALL-CAPS acronyms +
     // repeated proper nouns that may be worth adding to the glossary.
@@ -146,6 +176,31 @@ starlightGlossary({
   },
 });
 ```
+
+### Per-page autotag opt-out
+
+Disable auto-tagging on a single page via frontmatter:
+
+```md
+---
+title: Style Guide
+glossary: false
+---
+```
+
+Or toggle inline within a page using HTML comments:
+
+```md
+This sentence will tag known terms like TLS.
+
+<!-- glossary-off -->
+This sentence will NOT have its terms tagged.
+<!-- glossary-on -->
+
+This sentence resumes tagging.
+```
+
+Useful for code-style guides, FAQs that mention terms in a meta way, or any prose where the tooltip would be more distracting than helpful.
 
 ## How the build works
 
@@ -159,9 +214,9 @@ Every page render runs the same pipeline:
 The finalize step — alias promotion, Wikipedia discovery, atomic writes, lint report — runs at two different triggers:
 
 - **`astro build`** — once at `astro:build:done`, after every page has been rendered.
-- **`astro dev`** — on a 5-second poll while the dev server is running. Only actually does work if new references have been seen since the last run, so it's cheap. Also runs one final pass on shutdown.
+- **`astro dev`** — debounced (~2s) and scheduled by the remark pass when it sees a new slug or alias label since the last run. Cheap when nothing changed; also runs one final pass on dev-server shutdown.
 
-No manual CLI steps. Editing `glossary.json` by hand works fine — the plugin respects everything you set and only extends.
+No manual CLI steps. Editing `glossary.json` by hand works fine — the plugin respects everything you set and only extends. The file is validated at startup so typos surface as a clear error rather than a cryptic runtime crash.
 
 ## Source-level transform (for `.md` endpoints, `llms.txt`, etc.)
 
@@ -195,6 +250,27 @@ The plugin ships these CSS classes; override them in your own stylesheet if you 
 | `.sl-glossary-term[data-glossary-read]` | Muted — user has hovered ≥1.5s (localStorage) |
 | `.sl-glossary-popover` | The tooltip element itself |
 
+## Working with reconcile (Wikipedia redirects)
+
+When the cached Wikipedia title for an entry differs from its `term`, the reconcile pass tries to resolve the divergence safely:
+
+- **RENAME** — adopts the canonical Wikipedia title when the change is case-only or one is a prefix of the other (e.g. `"public key"` → `"Public-key cryptography"`). Old term is preserved as an alias.
+- **MERGE** — folds this entry into another existing entry that already owns the canonical Wikipedia article. The source becomes a `mergedInto` stub; the target absorbs aliases. References in `src/content/docs/` are auto-rewritten to the canonical slug (disable via `reconcile.rewriteDocRefs: false`).
+- **SKIP** — when the title change is substantial (e.g. `ChaCha20` → `Salsa20`) the entry is left alone and a warning is logged. To silence the warning permanently, add `wikipediaRedirectAcknowledged: "<the cached title>"` to the entry. The warning resumes if Wikipedia later changes the canonical title to something else.
+
+If you want to *preview* what reconcile would do without applying any changes, set `reconcile: { dryRun: true }` in your plugin options. The build log shows `[dry-run] would merge / would adopt …` so you can audit before opting in.
+
+## Hand-editing `glossary.json`
+
+Hand-editing is fully supported. The file is validated at startup with path-annotated error messages — a typo like `"caseSensitive": "yes"` produces:
+
+```
+glossary.json failed validation (1 problem):
+  · terms["tls"].caseSensitive: expected boolean
+```
+
+So you find out immediately, not later from a cryptic runtime crash.
+
 ## Why not per-term `.md` files?
 
 Earlier versions of this plugin used a content collection (`src/content/glossary/*.md`). A single `glossary.json` turned out to be a better fit:
@@ -203,6 +279,18 @@ Earlier versions of this plugin used a content collection (`src/content/glossary
 - Diffs at term level stay git-friendly without 200-file sprawl.
 - The plugin can write back new aliases and freshly-discovered entries atomically.
 - No `content.config.ts` boilerplate for consumers.
+
+## Development
+
+```sh
+git clone https://github.com/Wave-RF/starlight-glossary.git
+cd starlight-glossary
+pnpm install
+pnpm typecheck
+pnpm test
+```
+
+The project ships uncompiled TypeScript (consumed by Astro/Vite directly). Test suite uses [vitest](https://vitest.dev/); CI runs typecheck + tests on every push and pull request.
 
 ## License
 

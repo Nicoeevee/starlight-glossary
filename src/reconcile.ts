@@ -45,7 +45,7 @@ export function reconcileWikipediaRedirects(
   // run of the plugin (or the user) set both entries' `wikipedia` to the
   // same canonical slug, so the redirect-based check below would find
   // nothing to do.
-  mergeDuplicateArticles(index, cache, report);
+  let prePassMutated = mergeDuplicateArticles(index, cache, report);
 
   const canonicalOwner = (): Map<string, string> => {
     const out = new Map<string, string>();
@@ -61,7 +61,7 @@ export function reconcileWikipediaRedirects(
     return out;
   };
 
-  let mutated = false;
+  let mutated = prePassMutated;
   const slugs = Object.keys(index.terms);
   for (const slug of slugs) {
     const entry = index.terms[slug];
@@ -138,12 +138,23 @@ export function reconcileWikipediaRedirects(
       continue;
     }
 
-    // Not safe to touch automatically — just record.
+    // Not safe to touch automatically.
+    // If the user has explicitly acknowledged this divergence on the
+    // entry, stay silent — they reviewed it and meant it.
+    if (
+      entry.wikipediaRedirectAcknowledged &&
+      entry.wikipediaRedirectAcknowledged === cached.title
+    ) {
+      continue;
+    }
     report.skipped.push({
       slug,
       term: entry.term,
       cachedTitle: cached.title,
-      reason: "term differs substantially from Wikipedia title; edit glossary.json manually",
+      reason:
+        `term differs substantially from Wikipedia title; ` +
+        `edit glossary.json manually, or set ` +
+        `wikipediaRedirectAcknowledged: "${cached.title}" to silence this`,
     });
   }
 
@@ -158,7 +169,8 @@ function mergeDuplicateArticles(
   index: GlossaryIndex,
   cache: GlossaryCache,
   report: ReconcileReport,
-): void {
+): boolean {
+  let mutated = false;
   // Group non-merged, non-fragmented, non-groupWith entries by article
   const byArticle = new Map<string, string[]>();
   for (const [slug, entry] of Object.entries(index.terms)) {
@@ -211,8 +223,10 @@ function mergeDuplicateArticles(
         into: winner,
         intoTerm: winnerEntry.term,
       });
+      mutated = true;
     }
   }
+  return mutated;
 }
 
 function canSafelyAdopt(currentTerm: string, canonicalTitle: string): boolean {

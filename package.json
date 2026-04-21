@@ -1,6 +1,6 @@
 {
   "name": "starlight-glossary",
-  "version": "1.0.14",
+  "version": "1.1.0",
   "description": "Starlight plugin that adds an interactive glossary with hover tooltips. Driven by a single glossary.json index plus a committed Wikipedia cache — zero content-collection boilerplate.",
   "keywords": [
     "astro",
@@ -49,10 +49,16 @@
     "mdast-util-to-string": "^4.0.0",
     "unist-util-visit": "^5.0.0"
   },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
   "devDependencies": {
     "@astrojs/starlight": "^0.38.3",
     "astro": "^6.1.5",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   },
   "publishConfig": {
     "access": "public"

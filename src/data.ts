@@ -29,6 +29,15 @@ export interface GlossaryEntry {
    *  alias (explicit or auto-tagged) get the fragment carried through to
    *  the Wikipedia link. Not usually hand-edited. */
   aliasFragments?: Record<string, string>;
+  /** When set, suppresses the reconcile "Wikipedia title changed" warning
+   *  for this entry as long as the cached Wikipedia title still equals
+   *  this string. Useful for entries where the user has *intentionally*
+   *  picked a different name than Wikipedia's canonical form (e.g.
+   *  ChaCha20 pointing at the Salsa20 article — same authors, distinct
+   *  cipher, different community usage). If Wikipedia later changes the
+   *  canonical title to something else, the warning resumes so the user
+   *  knows to re-review. */
+  wikipediaRedirectAcknowledged?: string | null;
 }
 
 export interface GlossaryIndex {
@@ -59,6 +68,7 @@ export interface RuntimeGlossaryEntry {
   groupWith: string | null;
   mergedInto?: string | null;
   aliasFragments?: Record<string, string>;
+  wikipediaRedirectAcknowledged?: string | null;
   cached: GlossaryCacheEntry | null;
 }
 

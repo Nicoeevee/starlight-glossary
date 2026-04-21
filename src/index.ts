@@ -1,4 +1,7 @@
-import type { StarlightPlugin } from "@astrojs/starlight/types";
+import type {
+  StarlightIntegrationAstroConfigSetupCtx,
+  StarlightPlugin,
+} from "./starlight-types.js";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -17,12 +20,18 @@ import {
   discoverMissingTerms,
   fillCacheHoles,
   type UnresolvedReference,
+  type WikipediaConfig,
 } from "./discovery.js";
 import { reconcileWikipediaRedirects } from "./reconcile.js";
 import { rewriteDocRefs } from "./rewrite-refs.js";
 import { remarkAutoTag, type AutoTagMode } from "./autotag.js";
 import { createLintCollector, renderLintReport } from "./lint.js";
 import { writeJsonAtomic } from "./persist.js";
+import {
+  GlossaryValidationError,
+  validateGlossaryCache,
+  validateGlossaryIndex,
+} from "./validate.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,6 +52,23 @@ export interface StarlightGlossaryOptions {
     /** Default: `true`. Set to `false` to leave unknown refs unresolved. */
     enabled?: boolean;
   };
+  /** Wikipedia network behaviour for cache-fill and discovery. */
+  wikipedia?: WikipediaConfig;
+  reconcile?: {
+    /** Default: `true`. When false, no merge/rename based on Wikipedia
+     *  redirects is performed at all. Cache holes are still filled. */
+    enabled?: boolean;
+    /** Default: `false`. When true, the reconcile pass *reports* what it
+     *  would do (merges, renames, doc-ref rewrites) but does not modify
+     *  `glossary.json`, the cache, or any doc files. Useful for review
+     *  before opting in to auto-application. */
+    dryRun?: boolean;
+    /** Default: `true`. When false, merges still happen (the source
+     *  becomes a `mergedInto` stub) but `[label](glossary:old-slug)`
+     *  references in `src/content/docs/` are NOT rewritten. Doc links
+     *  continue to resolve via the merged-into stub at render time. */
+    rewriteDocRefs?: boolean;
+  };
   lint?: {
     /** Default: `false`. When enabled, writes `.astro/glossary-lint.md`. */
     enabled?: boolean;
@@ -60,6 +86,14 @@ export default function starlightGlossary(
   const wikipediaBase = options.wikipediaBase ?? "https://en.wikipedia.org/wiki/";
   const autoTagMode: AutoTagMode = options.autoTag?.mode ?? "first";
   const discoveryEnabled = options.discovery?.enabled ?? true;
+  const wikipedia: WikipediaConfig = {
+    enabled: options.wikipedia?.enabled ?? true,
+    strict: options.wikipedia?.strict ?? false,
+    timeoutMs: options.wikipedia?.timeoutMs ?? 10_000,
+  };
+  const reconcileEnabled = options.reconcile?.enabled ?? true;
+  const reconcileDryRun = options.reconcile?.dryRun ?? false;
+  const reconcileRewriteDocs = options.reconcile?.rewriteDocRefs ?? true;
   const lintEnabled = options.lint?.enabled ?? true;
   const lintMinOccurrences = options.lint?.minOccurrences ?? 3;
 
@@ -176,6 +210,7 @@ export default function starlightGlossary(
                 indexRef,
                 cacheRef,
                 logger,
+                wikipedia,
               );
               if (report.added.length > 0) mutated = true;
             }
@@ -219,7 +254,9 @@ export default function starlightGlossary(
         addIntegration({
           name: "starlight-glossary/integration",
           hooks: {
-            async "astro:config:setup"(astroCtx) {
+            async "astro:config:setup"(
+              astroCtx: StarlightIntegrationAstroConfigSetupCtx,
+            ) {
               const {
                 injectRoute,
                 injectScript,
@@ -262,6 +299,7 @@ export default function starlightGlossary(
                   indexRef,
                   cacheRef,
                   logger,
+                  wikipedia,
                 );
                 if (filled > 0) shouldPersist = true;
               }
@@ -270,21 +308,40 @@ export default function starlightGlossary(
               // Conservative: only adopt canonical names that are case-only
               // or prefix-related to the user's term, and only merge when
               // another entry clearly owns the same article.
-              const { report, mutated: reconciled } =
-                reconcileWikipediaRedirects(indexRef, cacheRef);
+              //
+              // Dry-run mode runs against deep clones, so the report
+              // describes what *would* happen without touching anything.
+              const reconcileTargetIndex = reconcileEnabled
+                ? reconcileDryRun
+                  ? structuredClone(indexRef)
+                  : indexRef
+                : null;
+              const reconcileTargetCache = reconcileEnabled
+                ? reconcileDryRun
+                  ? structuredClone(cacheRef)
+                  : cacheRef
+                : null;
+              const reconcileResult = reconcileTargetIndex
+                ? reconcileWikipediaRedirects(
+                    reconcileTargetIndex,
+                    reconcileTargetCache!,
+                  )
+                : { report: { merged: [], renamed: [], skipped: [] }, mutated: false };
+              const { report, mutated: reconciled } = reconcileResult;
+              const dryRunPrefix = reconcileDryRun ? "[dry-run] would " : "";
               for (const r of report.merged) {
                 logger.info(
-                  `merged "${r.fromTerm}" (${r.from}) into "${r.intoTerm}" (${r.into})`,
+                  `${dryRunPrefix}merged "${r.fromTerm}" (${r.from}) into "${r.intoTerm}" (${r.into})`,
                 );
               }
               for (const r of report.renamed) {
                 logger.info(
-                  `adopted Wikipedia canonical name "${r.newTerm}" for slug "${r.slug}" (was "${r.oldTerm}")`,
+                  `${dryRunPrefix}adopted Wikipedia canonical name "${r.newTerm}" for slug "${r.slug}" (was "${r.oldTerm}")`,
                 );
               }
               if (report.skipped.length > 0) {
                 logger.info(
-                  `${report.skipped.length} entries have Wikipedia redirects with substantial title changes — review glossary.json if you want to update them:`,
+                  `${report.skipped.length} entries have Wikipedia redirects with substantial title changes — review glossary.json if you want to update them, or add wikipediaRedirectAcknowledged: "<title>" on the entry to silence:`,
                 );
                 for (const s of report.skipped.slice(0, 10)) {
                   logger.info(
@@ -297,13 +354,22 @@ export default function starlightGlossary(
                   );
                 }
               }
+              if (reconcileDryRun && (report.merged.length > 0 || report.renamed.length > 0)) {
+                logger.info(
+                  `[dry-run] reconcile.dryRun=true — no changes written. Set reconcile.dryRun=false to apply.`,
+                );
+              }
 
               // Rewrite doc references so `[x](glossary:old-slug)` in
               // source becomes `[x](glossary:new-slug)` automatically.
               // Runs after merge/rename so slug changes propagate without
               // any manual find-and-replace. The mergedInto stubs remain
               // as a safety net for any refs we might miss.
-              if (report.merged.length > 0) {
+              if (
+                report.merged.length > 0 &&
+                reconcileRewriteDocs &&
+                !reconcileDryRun
+              ) {
                 const rewrites = new Map<string, string>();
                 for (const m of report.merged) rewrites.set(m.from, m.into);
                 const { filesChanged, refsChanged } = await rewriteDocRefs(
@@ -318,7 +384,7 @@ export default function starlightGlossary(
                 }
               }
 
-              if (reconciled) shouldPersist = true;
+              if (reconciled && !reconcileDryRun) shouldPersist = true;
 
               if (shouldPersist) {
                 cacheRef.fetchedAt = new Date().toISOString();
@@ -515,18 +581,57 @@ async function loadGlossaryFiles(
     fetchedAt: new Date(0).toISOString(),
     terms: {},
   };
+  // We distinguish three outcomes per file:
+  //   1. file read + parsed + validated OK → use it
+  //   2. file missing / unreadable → warn, start fresh
+  //   3. file exists but malformed → rethrow. Silently starting fresh
+  //      would overwrite the user's hand-edited file on the next save.
+  let indexRaw: unknown = null;
   try {
-    index = JSON.parse(await readFile(indexPath, "utf8"));
-  } catch {
-    logger.warn(`Could not read ${indexPath}; starting with an empty glossary.`);
+    indexRaw = JSON.parse(await readFile(indexPath, "utf8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      logger.warn(
+        `Could not read ${indexPath}; starting with an empty glossary.`,
+      );
+    } else {
+      throw err;
+    }
   }
+  if (indexRaw !== null) {
+    try {
+      index = validateGlossaryIndex(indexRaw, indexPath);
+    } catch (err) {
+      if (err instanceof GlossaryValidationError) {
+        throw err;
+      }
+      throw err;
+    }
+  }
+
+  let cacheRaw: unknown = null;
   try {
-    cache = JSON.parse(await readFile(cachePath, "utf8"));
-  } catch {
-    logger.warn(
-      `${cachePath} not found — any glossary references will be looked up on Wikipedia during this build.`,
-    );
+    cacheRaw = JSON.parse(await readFile(cachePath, "utf8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      logger.warn(
+        `${cachePath} not found — any glossary references will be looked up on Wikipedia during this build.`,
+      );
+    } else {
+      throw err;
+    }
   }
+  if (cacheRaw !== null) {
+    try {
+      cache = validateGlossaryCache(cacheRaw, cachePath);
+    } catch (err) {
+      if (err instanceof GlossaryValidationError) {
+        throw err;
+      }
+      throw err;
+    }
+  }
+
   return { index, cache };
 }
 

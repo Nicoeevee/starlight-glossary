@@ -1,5 +1,22 @@
 import type { GlossaryCache, GlossaryIndex } from "./data.js";
-import { fetchWikipedia, fetchManyWikipedia } from "./wikipedia.js";
+import {
+  fetchManyWikipedia,
+  fetchWikipedia,
+  type FetchOptions,
+} from "./wikipedia.js";
+
+export interface WikipediaConfig {
+  /** When false, no Wikipedia network calls are made. Build proceeds with
+   *  whatever is in `glossary-cache.json`; missing extracts remain blank.
+   *  Useful for offline / air-gapped builds. Default: true. */
+  enabled?: boolean;
+  /** When true, any Wikipedia error that prevented filling a known cache
+   *  hole or discovering a new term throws and fails the build. Use this
+   *  in CI to catch network problems early. Default: false (warnings only). */
+  strict?: boolean;
+  /** Per-request timeout in milliseconds. Default: 10_000. */
+  timeoutMs?: number;
+}
 
 // Discovery pipeline — turns unknown slug references into glossary entries.
 // For each unknown slug, ask Wikipedia with the label (or slug turned back
@@ -41,6 +58,7 @@ export async function discoverMissingTerms(
   index: GlossaryIndex,
   cache: GlossaryCache,
   logger: { info: (m: string) => void; warn: (m: string) => void },
+  wikipedia: WikipediaConfig = {},
 ): Promise<DiscoveryReport> {
   const report: DiscoveryReport = {
     added: [],
@@ -49,11 +67,21 @@ export async function discoverMissingTerms(
     errored: [],
   };
 
+  if (wikipedia.enabled === false) {
+    if (unresolved.length > 0) {
+      logger.warn(
+        `wikipedia.enabled=false — ${unresolved.length} unknown reference(s) will remain unresolved`,
+      );
+    }
+    return report;
+  }
+  const fetchOpts: FetchOptions = { timeoutMs: wikipedia.timeoutMs };
+
   for (const ref of unresolved) {
     // Prefer the explicit Wikipedia article from the reference URL when
     // provided (glossary:Article#Section syntax). Fall back to the label.
     const query = ref.article || ref.label;
-    const { summary, errorReason } = await fetchWikipedia(query);
+    const { summary, errorReason } = await fetchWikipedia(query, fetchOpts);
     if (!summary) {
       report.errored.push(ref.slug);
       logger.warn(
@@ -107,6 +135,21 @@ export async function discoverMissingTerms(
     );
   }
 
+  if (wikipedia.strict && (report.errored.length > 0 || report.missing.length > 0 || report.ambiguous.length > 0)) {
+    const summary = [
+      report.errored.length > 0 ? `${report.errored.length} error(s)` : null,
+      report.missing.length > 0 ? `${report.missing.length} missing` : null,
+      report.ambiguous.length > 0
+        ? `${report.ambiguous.length} ambiguous`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(
+      `wikipedia.strict: discovery had problems (${summary}). See warnings above.`,
+    );
+  }
+
   return report;
 }
 
@@ -129,6 +172,7 @@ export async function fillCacheHoles(
   index: GlossaryIndex,
   cache: GlossaryCache,
   logger: { info: (m: string) => void; warn: (m: string) => void },
+  wikipedia: WikipediaConfig = {},
 ): Promise<number> {
   const articleTitles: string[] = [];
   const slugsByArticle = new Map<string, string[]>();
@@ -144,12 +188,22 @@ export async function fillCacheHoles(
   }
 
   if (articleTitles.length === 0) return 0;
+
+  if (wikipedia.enabled === false) {
+    logger.warn(
+      `wikipedia.enabled=false — skipping fetch for ${articleTitles.length} term(s) without cached data; tooltips will show empty bodies until you re-enable.`,
+    );
+    return 0;
+  }
+
   logger.info(
     `fetching Wikipedia summaries for ${articleTitles.length} known term(s) without cached data…`,
   );
 
   const uniqueTitles = Array.from(new Set(articleTitles));
-  const results = await fetchManyWikipedia(uniqueTitles);
+  const results = await fetchManyWikipedia(uniqueTitles, 3, {
+    timeoutMs: wikipedia.timeoutMs,
+  });
 
   let filled = 0;
   let errored = 0;
@@ -182,8 +236,13 @@ export async function fillCacheHoles(
   }
   if (errored > 0 || missing > 0) {
     logger.info(
-      `  cached ${filled} / ${results.size}; ${errored} error(s), ${missing} missing`,
+      `  cached ${filled} / ${results.size}; ${errored} error(s), ${missing} missing — site will build with whatever cache exists.`,
     );
+    if (wikipedia.strict && errored > 0) {
+      throw new Error(
+        `wikipedia.strict: ${errored} fetch error(s) while filling cache holes. Set wikipedia.strict=false (or fix connectivity) to allow partial results.`,
+      );
+    }
   }
   return filled;
 }

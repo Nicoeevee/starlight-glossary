@@ -27,13 +27,25 @@ export interface FetchResult {
   errorReason?: string;
 }
 
+export interface FetchOptions {
+  /** Per-request timeout in milliseconds. Default: 10_000. Hitting this
+   *  produces an `AbortError` which the retry layer treats as transient. */
+  timeoutMs?: number;
+}
+
 /** Fetch Wikipedia summary for a given article title/slug. Returns a
  *  structured result — `{summary}` on success (including 404 as
  *  `summary.missing=true`), or `{summary: null, errorReason}` on network
  *  failure or unexpected status. */
-export async function fetchWikipedia(title: string): Promise<FetchResult> {
+export async function fetchWikipedia(
+  title: string,
+  options: FetchOptions = {},
+): Promise<FetchResult> {
+  const timeoutMs = options.timeoutMs ?? 10_000;
   const slug = title.replace(/ /g, "_");
   const url = `${API_BASE}/page/summary/${encodeURIComponent(slug)}?redirect=true`;
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       headers: {
@@ -41,6 +53,7 @@ export async function fetchWikipedia(title: string): Promise<FetchResult> {
           "starlight-glossary (https://github.com/Wave-RF/starlight-glossary)",
         Accept: "application/json",
       },
+      signal: controller.signal,
     });
     if (res.status === 404) {
       return {
@@ -80,20 +93,25 @@ export async function fetchWikipedia(title: string): Promise<FetchResult> {
       },
     };
   } catch (err) {
-    return {
-      summary: null,
-      errorReason: (err as Error).message ?? "unknown fetch error",
-    };
+    const e = err as Error & { name?: string };
+    const reason =
+      e.name === "AbortError"
+        ? `timeout after ${timeoutMs}ms`
+        : e.message ?? "unknown fetch error";
+    return { summary: null, errorReason: reason };
+  } finally {
+    clearTimeout(timeoutHandle);
   }
 }
 
 /** Fetch summaries for a list of titles with a concurrency cap.
  *  Serialises per-worker so the total concurrent in-flight requests never
  *  exceeds `concurrency`. Retries transient failures (network errors, 5xx,
- *  429) up to twice with exponential backoff. */
+ *  429, timeouts) up to twice with exponential backoff. */
 export async function fetchManyWikipedia(
   titles: string[],
   concurrency: number = 3,
+  options: FetchOptions = {},
 ): Promise<Map<string, FetchResult>> {
   const out = new Map<string, FetchResult>();
   let i = 0;
@@ -101,7 +119,7 @@ export async function fetchManyWikipedia(
     while (i < titles.length) {
       const idx = i++;
       const title = titles[idx] as string;
-      let result = await fetchWikipedia(title);
+      let result = await fetchWikipedia(title, options);
       let attempt = 1;
       while (
         result.summary === null &&
@@ -110,7 +128,7 @@ export async function fetchManyWikipedia(
         shouldRetry(result.errorReason)
       ) {
         await new Promise((r) => setTimeout(r, 400 * 2 ** (attempt - 1)));
-        result = await fetchWikipedia(title);
+        result = await fetchWikipedia(title, options);
         attempt++;
       }
       out.set(title, result);
@@ -126,6 +144,7 @@ function shouldRetry(reason: string): boolean {
     reason.includes("fetch failed") ||
     reason.includes("ECONNRESET") ||
     reason.includes("ETIMEDOUT") ||
+    reason.includes("timeout") ||
     reason.includes("429") ||
     reason.includes("500") ||
     reason.includes("502") ||

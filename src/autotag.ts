@@ -121,9 +121,28 @@ const SAFE_PARENT_TYPES = new Set([
   "footnoteDefinition",
 ]);
 
+/** Look at the markdown vfile to decide if this page opts out of
+ *  auto-tagging entirely. We honour two conventions:
+ *   1. `glossary: false` in frontmatter — disables autotag for this page.
+ *   2. Astro's per-file frontmatter is exposed under `file.data.astro.frontmatter`
+ *      (set up by `@astrojs/markdown-remark` before user remark plugins run).
+ *
+ *  Returns `true` if the page is opted out. */
+function pageOptedOut(file: unknown): boolean {
+  if (!file || typeof file !== "object") return false;
+  const f = file as { data?: { astro?: { frontmatter?: Record<string, unknown> } } };
+  const frontmatter = f.data?.astro?.frontmatter;
+  if (!frontmatter || typeof frontmatter !== "object") return false;
+  return frontmatter.glossary === false;
+}
+
+const OFF_MARKER = /^\s*<!--\s*glossary-off\s*-->\s*$/;
+const ON_MARKER = /^\s*<!--\s*glossary-on\s*-->\s*$/;
+
 export function remarkAutoTag(opts: AutoTagOptions) {
-  return function transformer(tree: unknown) {
+  return function transformer(tree: unknown, file?: unknown) {
     if (opts.mode === "off") return;
+    if (pageOptedOut(file)) return;
     const matcher = buildMatcher(opts.data);
     const ctx: AutoTagContext = {
       matcher,
@@ -132,20 +151,33 @@ export function remarkAutoTag(opts: AutoTagOptions) {
       tagged: new Set(),
     };
 
+    // Inline opt-out: <!-- glossary-off --> and <!-- glossary-on --> markers
+    // (as raw HTML comments) toggle a per-walk flag. Defaults to "on";
+    // sections wrapped in markers stay untouched. We consult the flag
+    // before rewriting any text node.
+    let inlineOff = false;
+
     // Rewrite each matching text node in-place to an `html` node. This
     // avoids splicing on the parent (which trips up MDX's AST processing)
     // while still producing tagged anchors in the rendered output. HTML
     // nodes are valid in both mdast and the MDX pipeline.
     visit(
       tree as Parameters<typeof visit>[0],
-      "text",
       (node, _index, parent) => {
+        const n = node as { type: string; value?: string };
+        if (n.type === "html" && typeof n.value === "string") {
+          if (OFF_MARKER.test(n.value)) inlineOff = true;
+          else if (ON_MARKER.test(n.value)) inlineOff = false;
+          return;
+        }
+        if (n.type !== "text") return;
+        if (inlineOff) return;
         if (!parent) return;
         const p = parent as unknown as { type: string };
         if (!SAFE_PARENT_TYPES.has(p.type)) return;
 
-        const n = node as unknown as TextNode;
-        const text = n.value;
+        const tn = node as unknown as TextNode;
+        const text = tn.value;
         const matches = findMatches(text, ctx);
         if (matches.length === 0) return;
 
