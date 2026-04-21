@@ -676,6 +676,97 @@ describe("remarkAutoTag — HTML/attr escaping", () => {
   });
 });
 
+describe("remarkAutoTag — nested aliases (IP / IP routing)", () => {
+  it("longer alias wins when both start at same position (cross case-sensitivity)", () => {
+    // "IP" case-sensitive vs "IP routing" case-insensitive at the same
+    // start — the longer alias should win regardless of which set it came
+    // from. This was buggy in earlier versions: case-sensitive
+    // collected first always suppressed the longer case-insensitive.
+    const data = makeData({
+      ip: makeEntry({ term: "IP", aliases: ["IP"], caseSensitive: true }),
+      routing: makeEntry({
+        term: "IP routing",
+        aliases: ["IP routing"],
+        caseSensitive: false,
+      }),
+    });
+    const tree = root(paragraph(text("IP routing is fast")));
+    run(data, "all", tree);
+    const n = firstChild(tree, 0, 0) as HtmlNode;
+    expect(n.value).toContain(">IP routing</a>");
+    expect(n.value).not.toContain(">IP</a>");
+  });
+
+  it("longer alias wins when both are case-sensitive at the same start", () => {
+    const data = makeData({
+      ip: makeEntry({ term: "IP", aliases: ["IP"], caseSensitive: true }),
+      routing: makeEntry({
+        term: "IP routing",
+        aliases: ["IP routing"],
+        caseSensitive: true,
+      }),
+    });
+    const tree = root(paragraph(text("IP routing is fast")));
+    run(data, "all", tree);
+    const n = firstChild(tree, 0, 0) as HtmlNode;
+    expect(n.value).toContain(">IP routing</a>");
+  });
+
+  it("longer alias wins when both are case-insensitive at the same start", () => {
+    const data = makeData({
+      ip: makeEntry({ term: "IP", aliases: ["IP"], caseSensitive: false }),
+      routing: makeEntry({
+        term: "IP routing",
+        aliases: ["IP routing"],
+        caseSensitive: false,
+      }),
+    });
+    const tree = root(paragraph(text("ip routing is fast")));
+    run(data, "all", tree);
+    const n = firstChild(tree, 0, 0) as HtmlNode;
+    expect(n.value).toContain(">ip routing</a>");
+  });
+
+  it("shorter alias tags alone when the longer alias is NOT in the glossary", () => {
+    const data = makeData({
+      ip: makeEntry({ term: "IP", aliases: ["IP"], caseSensitive: true }),
+    });
+    const tree = root(paragraph(text("IP routing is fast")));
+    run(data, "all", tree);
+    const n = firstChild(tree, 0, 0) as HtmlNode;
+    expect(n.value).toContain(">IP</a>");
+    // " routing is fast" remains as plain text after the anchor
+    expect(n.value).toContain(" routing is fast");
+  });
+
+  it("word boundaries: 'IP' alias doesn't match inside 'IPS'", () => {
+    const data = makeData({
+      ip: makeEntry({ term: "IP", aliases: ["IP"], caseSensitive: true }),
+    });
+    const tree = root(paragraph(text("the IPS is great")));
+    run(data, "all", tree);
+    const n = firstChild(tree, 0, 0) as { type: string; value?: string };
+    // No match → text stays text, no mutation to html.
+    expect(n.type).toBe("text");
+  });
+
+  it("exact-case CS alias wins over same-position same-length CI alias", () => {
+    // Both entries have an alias "TLS" at the same position with same
+    // length but different slugs. Case-sensitive pools first, so it
+    // wins the tie (stable sort).
+    const data = makeData({
+      cs: makeEntry({ term: "TLS_CS", aliases: ["TLS"], caseSensitive: true }),
+      ci: makeEntry({ term: "TLS_CI", aliases: ["TLS"], caseSensitive: false }),
+    });
+    const tree = root(paragraph(text("TLS is everywhere")));
+    run(data, "all", tree);
+    const n = firstChild(tree, 0, 0) as HtmlNode;
+    // Slug comes from the CS entry.
+    expect(n.value).toContain('data-glossary-term="cs"');
+    expect(n.value).not.toContain('data-glossary-term="ci"');
+  });
+});
+
 describe("remarkAutoTag — overlapping matches", () => {
   it("first (by start index) match wins; overlapping second is dropped", () => {
     // "Public Key" matches first alias; "Key Encryption" would overlap with the
@@ -703,7 +794,10 @@ describe("remarkAutoTag — overlapping matches", () => {
     expect(n.value).toContain(" Encryption is great");
   });
 
-  it("case-insensitive match suppressed by earlier overlapping case-sensitive match", () => {
+  it("earlier-starting match wins when partially overlapping with a later one", () => {
+    // ABC DEF at [0,7] (cs), DEF GHI at [4,11] (ci). Earlier start wins.
+    // Case-sensitivity is incidental — rule is simply "leftmost match
+    // wins, dropping anything it covers".
     const data = makeData({
       cs: makeEntry({
         term: "ABC",
@@ -720,7 +814,6 @@ describe("remarkAutoTag — overlapping matches", () => {
     run(data, "all", tree);
     const n = firstChild(tree, 0, 0) as HtmlNode;
     const anchors = (n.value.match(/<a /g) ?? []).length;
-    // ABC DEF takes precedence; remaining " GHI" isn't an alias alone
     expect(anchors).toBe(1);
     expect(n.value).toContain(">ABC DEF</a>");
   });

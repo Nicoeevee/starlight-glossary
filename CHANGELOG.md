@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] — 2026-04-20
+
+### Fixed
+
+- **Autotag overlap resolution no longer silently favours case-sensitive aliases.** Previous versions collected case-sensitive matches first and dropped any overlapping case-insensitive match, even when the CI match was longer and more specific. Result: glossary with both `"IP"` (case-sensitive) and `"IP routing"` (case-insensitive) would tag the shorter `"IP"` inside text matching the full `"IP routing"` phrase. Now the rule is "earliest start wins; at a tie, longer match wins" — the phrase wins as users expect.
+- **Proper-noun lint over-counted sentence starters.** `"The Wave Clip"`, `"Each Wave Clip"`, `"A Wave Clip"` were each being counted as distinct proper nouns at occurrence 1 instead of all contributing to `"Wave Clip"`'s count. Leading stop-words (`The`, `A`, `An`, `This`, `Each`, `Every`, `Some`, `Many`, `Most`, `Any`, `Our`, `Their`, `Its`, `All`, `Few`, `Several`, …) are now stripped from the front of matches so the underlying noun is counted consistently.
+
+### Added
+
+- **`lint.ignore`** option. Accepts strings (exact match, case-insensitive) or RegExp patterns to suppress false-positive findings without touching `glossary.json`.
+- **`US`, `UK`, `EU`** added to the baseline acronym suppression list alongside the existing conjunction/annotation shouts (`NOT`, `OK`, `TODO`, …).
+
+### Docs
+
+- README now explains the auto-tagging match rules (earliest start wins; at a tie longer wins; exact-case breaks length+position ties) with worked examples for nested aliases like `IP` vs `IP routing`.
+
 ## [1.1.1] — 2026-04-20
 
 ### Added

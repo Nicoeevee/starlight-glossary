@@ -225,20 +225,27 @@ function escapeAttr(s: string): string {
 }
 
 function findMatches(text: string, ctx: AutoTagContext): Match[] {
-  const matches: Match[] = [];
+  // Collect every candidate match from both regexes without filtering
+  // overlaps yet. Overlap resolution happens at the end with a single
+  // ordering rule: earliest start wins; at a tie, longer match wins.
+  // This guarantees that "IP routing" (case-insensitive alias) beats
+  // "IP" (case-sensitive alias) when both match at the same position —
+  // the previous version silently preferred case-sensitive because it
+  // was collected first, which was a latent bug for nested aliases
+  // split across case-sensitive / case-insensitive entries.
+  const candidates: Match[] = [];
   const { caseSensitiveRe, caseInsensitiveRe, aliasToSlug, aliasToSlugCi } =
     ctx.matcher;
-
   const aliasFragment = ctx.matcher.aliasFragment;
+
   if (caseSensitiveRe) {
     caseSensitiveRe.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = caseSensitiveRe.exec(text)) !== null) {
       const slug = aliasToSlug.get(m[0]);
       if (!slug) continue;
-      if (ctx.mode === "first" && ctx.tagged.has(slug)) continue;
       const fragment = aliasFragment.get(m[0]);
-      matches.push({
+      candidates.push({
         start: m.index,
         end: m.index + m[0].length,
         slug,
@@ -252,17 +259,9 @@ function findMatches(text: string, ctx: AutoTagContext): Match[] {
     while ((m = caseInsensitiveRe.exec(text)) !== null) {
       const slug = aliasToSlugCi.get(m[0].toLowerCase());
       if (!slug) continue;
-      if (
-        matches.some(
-          (x) => x.start < m!.index + m![0].length && x.end > m!.index,
-        )
-      ) {
-        continue;
-      }
-      if (ctx.mode === "first" && ctx.tagged.has(slug)) continue;
       const fragment =
         aliasFragment.get(m[0]) ?? aliasFragment.get(m[0].toLowerCase());
-      matches.push({
+      candidates.push({
         start: m.index,
         end: m.index + m[0].length,
         slug,
@@ -271,15 +270,23 @@ function findMatches(text: string, ctx: AutoTagContext): Match[] {
     }
   }
 
-  matches.sort((a, b) => a.start - b.start);
+  // Prefer earlier start; at same start, prefer longer match (so
+  // "IP routing" beats a standalone "IP" entry when both are candidates
+  // at position 0). Stable sort keeps case-sensitive first at otherwise
+  // identical positions — i.e. exact-case wins when length + start tie.
+  candidates.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    return b.end - b.start - (a.end - a.start);
+  });
+
   const out: Match[] = [];
   let last = -1;
-  for (const m of matches) {
-    if (m.start >= last) {
-      out.push(m);
-      last = m.end;
-      if (ctx.mode === "first") ctx.tagged.add(m.slug);
-    }
+  for (const m of candidates) {
+    if (m.start < last) continue;
+    if (ctx.mode === "first" && ctx.tagged.has(m.slug)) continue;
+    out.push(m);
+    last = m.end;
+    if (ctx.mode === "first") ctx.tagged.add(m.slug);
   }
   return out;
 }

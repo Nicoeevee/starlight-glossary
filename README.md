@@ -183,6 +183,14 @@ starlightGlossary({
     enabled: true,
     // Minimum occurrences across all docs before a term is flagged.
     minOccurrences: 3,
+    // Silence false-positive findings. Accepts strings (exact match,
+    // case-insensitive) or RegExp patterns. Useful for generic phrases
+    // that happen to pattern-match but aren't glossary candidates.
+    ignore: [
+      "Total Message",       // generic prose, not a named concept
+      "Associated Data",     // already covered by the AAD entry
+      /^v\d+$/,              // version tokens like "V1", "V2"
+    ],
     // CI hook: throw if any findings remain at end of build. Use this
     // to enforce "no new untagged acronyms/proper-nouns slip through
     // without being added to glossary.json."
@@ -190,6 +198,22 @@ starlightGlossary({
   },
 });
 ```
+
+### How auto-tagging picks matches
+
+When several glossary aliases could match overlapping text, the rules are:
+
+1. **Earliest start wins.** Given `"IP"` and `"IP routing"` both starting at position 0 of `"IP routing is fast"`, both are candidates. Position is the first tiebreaker.
+2. **At a tie, longer wins.** When two matches start at the same position (very common with nested aliases like `IP` vs `IP routing`), the longer one is taken. This holds across case-sensitivity boundaries — a longer case-insensitive alias beats a shorter case-sensitive one.
+3. **Exact-case wins ties.** When two matches have the same start *and* the same length but different slugs, the case-sensitive entry wins (rare but well-defined for predictability).
+4. **Word boundaries are strict.** `\bIP\b` does not match inside `IPS` or `HTTPS`. `\bIP routing\b` matches only when both the leading and trailing edges are word boundaries.
+
+So if you have both `IP` (acronym) and `IP routing` (specific concept) in your glossary:
+- "the **IP routing** layer" — tags `IP routing`
+- "the **IP** address" — tags `IP`
+- "VoIP networks" — tags neither (no word boundary)
+
+If you only have `IP`, then `"IP routing"` tags only `IP` and ` routing` stays plain text.
 
 ### Per-page autotag opt-out
 

@@ -82,6 +82,12 @@ export interface StarlightGlossaryOptions {
     enabled?: boolean;
     /** Default: `3`. */
     minOccurrences?: number;
+    /** Terms to suppress from lint output. Accepts exact strings
+     *  (matched case-insensitively) or RegExp patterns (matched against
+     *  the candidate term). Use for acronyms that happen to look like
+     *  glossary candidates but aren't (`US`, `CD`, `ID`, …) or for
+     *  generic proper-noun phrases that would otherwise be noisy. */
+    ignore?: (string | RegExp)[];
     /** Default: `false`. When true, throws at end of build if any
      *  findings remain. Use in CI to enforce "no new untagged acronyms
      *  or repeated proper nouns slip through". */
@@ -109,6 +115,7 @@ export default function starlightGlossary(
   const reconcileFailOnSkips = options.reconcile?.failOnSkips ?? false;
   const lintEnabled = options.lint?.enabled ?? true;
   const lintMinOccurrences = options.lint?.minOccurrences ?? 3;
+  const lintIgnore = options.lint?.ignore ?? [];
   const lintFailOnFindings = options.lint?.failOnFindings ?? false;
 
   return {
@@ -479,6 +486,7 @@ export default function starlightGlossary(
                 enabled: lintEnabled,
                 minOccurrences: lintMinOccurrences,
                 data,
+                ignore: lintIgnore,
               });
 
               const serialised = JSON.stringify({
