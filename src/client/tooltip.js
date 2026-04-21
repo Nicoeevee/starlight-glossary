@@ -112,15 +112,28 @@ let showTimer = 0;
 let readTimer = 0;
 let currentSlug = null;
 
+// ARIA: the popover contains interactive content (links, a close button),
+// so role="dialog" (non-modal) is more correct than role="tooltip". The
+// heading receives an id that the dialog points at via aria-labelledby so
+// screen readers announce "<term> dialog" when focus enters. Term links
+// get aria-haspopup/aria-controls/aria-expanded on bind so assistive tech
+// knows the expandable content exists and can be opened.
+const POPOVER_ID = "sl-glossary-popover";
+const POPOVER_TERM_ID = "sl-glossary-popover-term";
+
 function ensurePopover() {
   if (popover) return popover;
   popover = document.createElement("div");
   popover.className = "sl-glossary-popover";
+  popover.id = POPOVER_ID;
   popover.setAttribute("popover", "manual");
-  popover.setAttribute("role", "tooltip");
+  popover.setAttribute("role", "dialog");
+  popover.setAttribute("aria-modal", "false");
+  popover.setAttribute("aria-labelledby", POPOVER_TERM_ID);
+  popover.setAttribute("tabindex", "-1");
   popover.innerHTML = `
-    <button type="button" class="sl-glossary-popover__close" aria-label="Close">×</button>
-    <h3 class="sl-glossary-popover__term"></h3>
+    <button type="button" class="sl-glossary-popover__close" aria-label="Close definition">×</button>
+    <h3 class="sl-glossary-popover__term" id="${POPOVER_TERM_ID}"></h3>
     <p class="sl-glossary-popover__tagline"></p>
     <div class="sl-glossary-popover__body"></div>
     <div class="sl-glossary-popover__footer"></div>
@@ -225,6 +238,7 @@ async function showFor(term) {
 
   activeTerm = term;
   currentSlug = slug;
+  term.setAttribute("aria-expanded", "true");
   try {
     if (!pop.matches(":popover-open")) pop.showPopover();
   } catch {
@@ -254,6 +268,7 @@ function scheduleHide() {
 function hideNow() {
   clearTimeout(showTimer);
   clearTimeout(readTimer);
+  if (activeTerm) activeTerm.setAttribute("aria-expanded", "false");
   activeTerm = null;
   currentSlug = null;
   if (!popover) return;
@@ -267,6 +282,10 @@ function hideNow() {
 function bind(term) {
   if (term.dataset.slGlossaryBound) return;
   term.dataset.slGlossaryBound = "1";
+  // ARIA: signal to AT that the term reveals an expandable dialog.
+  term.setAttribute("aria-haspopup", "dialog");
+  term.setAttribute("aria-controls", POPOVER_ID);
+  term.setAttribute("aria-expanded", "false");
   term.addEventListener("mouseenter", () => scheduleShow(term));
   term.addEventListener("mouseleave", () => scheduleHide());
   term.addEventListener("focus", () => showFor(term));

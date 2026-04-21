@@ -3,7 +3,33 @@
  * Terms are rendered as <a class="sl-glossary-term"> by the remark transform;
  * the popover is a native HTML Popover (<div popover="manual">) created on
  * demand by the client script.
+ *
+ * All visible properties resolve through --sl-glossary-* CSS variables with
+ * Starlight's --sl-color-* palette as the fallback, so consumers can retheme
+ * the glossary without rewriting selectors. Override at :root or any
+ * ancestor scope:
+ *
+ *   :root {
+ *     --sl-glossary-term-accent: hotpink;
+ *     --sl-glossary-popover-bg: #0b1020;
+ *   }
  */
+
+:root {
+  /* Term link colors */
+  --sl-glossary-term-accent: var(--sl-color-text-accent);
+  --sl-glossary-term-read-color: var(--sl-color-gray-4);
+  --sl-glossary-term-pending-color: var(--sl-color-orange-high, #f59e0b);
+
+  /* Popover chrome */
+  --sl-glossary-popover-bg: var(--sl-color-bg-nav);
+  --sl-glossary-popover-text: var(--sl-color-text);
+  --sl-glossary-popover-muted: var(--sl-color-gray-3);
+  --sl-glossary-popover-border: var(--sl-color-hairline);
+  --sl-glossary-popover-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  --sl-glossary-popover-radius: 0.5rem;
+  --sl-glossary-popover-close-hover-bg: var(--sl-color-gray-6);
+}
 
 .sl-markdown-content a.sl-glossary-term {
   text-decoration-style: dotted;
@@ -23,7 +49,7 @@
    sees it's not fully wired. */
 .sl-markdown-content a.sl-glossary-term--pending {
   text-decoration-style: wavy;
-  text-decoration-color: var(--sl-color-orange-high, #f59e0b);
+  text-decoration-color: var(--sl-glossary-term-pending-color);
 }
 
 /* Read-state: clicked through (browser :visited) or hovered long enough
@@ -31,7 +57,7 @@
    :visited due to browser privacy restrictions. */
 .sl-markdown-content a.sl-glossary-term:visited,
 .sl-markdown-content a.sl-glossary-term[data-glossary-read] {
-  color: var(--sl-color-gray-4);
+  color: var(--sl-glossary-term-read-color);
 }
 
 .sl-glossary-popover[popover] {
@@ -40,11 +66,11 @@
   margin: 0;
   padding: 0.75rem 1rem 0.9rem;
   max-width: min(28rem, calc(100vw - 2rem));
-  background: var(--sl-color-bg-nav);
-  color: var(--sl-color-text);
-  border: 1px solid var(--sl-color-hairline);
-  border-radius: 0.5rem;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  background: var(--sl-glossary-popover-bg);
+  color: var(--sl-glossary-popover-text);
+  border: 1px solid var(--sl-glossary-popover-border);
+  border-radius: var(--sl-glossary-popover-radius);
+  box-shadow: var(--sl-glossary-popover-shadow);
   font-size: 0.9rem;
   line-height: 1.45;
   z-index: 1000;
@@ -53,11 +79,11 @@
   margin: 0 1.5rem 0.1rem 0;
   font-size: 0.95rem;
   font-weight: 600;
-  color: var(--sl-color-text-accent);
+  color: var(--sl-glossary-term-accent);
 }
 .sl-glossary-popover__tagline {
   margin: 0 0 0.5rem 0;
-  color: var(--sl-color-gray-3);
+  color: var(--sl-glossary-popover-muted);
   font-size: 0.8rem;
   font-style: italic;
   line-height: 1.35;
@@ -72,17 +98,17 @@
   margin: 0.35rem 0;
 }
 .sl-glossary-popover__body a {
-  color: var(--sl-color-text-accent);
+  color: var(--sl-glossary-term-accent);
 }
 .sl-glossary-popover__footer {
   margin-top: 0.6rem;
   padding-top: 0.5rem;
-  border-top: 1px solid var(--sl-color-hairline);
+  border-top: 1px solid var(--sl-glossary-popover-border);
   font-size: 0.8rem;
-  color: var(--sl-color-gray-3);
+  color: var(--sl-glossary-popover-muted);
 }
 .sl-glossary-popover__footer a {
-  color: var(--sl-color-text-accent);
+  color: var(--sl-glossary-term-accent);
   text-decoration: none;
 }
 .sl-glossary-popover__footer a:hover {
@@ -96,12 +122,12 @@
   height: 1.5rem;
   border: 0;
   background: transparent;
-  color: var(--sl-color-text);
+  color: var(--sl-glossary-popover-text);
   font-size: 1.2rem;
   line-height: 1;
   cursor: pointer;
   border-radius: 0.25rem;
 }
 .sl-glossary-popover__close:hover {
-  background: var(--sl-color-gray-6);
+  background: var(--sl-glossary-popover-close-hover-bg);
 }

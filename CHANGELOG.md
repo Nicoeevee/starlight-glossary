@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-04-20
+
+### Added
+
+- **`lint.failOnFindings`** option (default: `false`). CI hook — throws at end of build if any untagged terms remain. Use to gate deploys on "every new term got added to glossary.json".
+- **`reconcile.failOnSkips`** option (default: `false`). CI hook — throws if reconcile reported any unresolved Wikipedia-redirect divergences. Forces explicit review via `wikipediaRedirectAcknowledged`.
+- **First-run dry-run default.** When `glossary-cache.json` does not yet exist, `reconcile.dryRun` is forced to `true` for that build. A fresh install of the plugin no longer silently merges entries or rewrites doc files on the very first build — the log shows what *would* happen, and the user removes the option (or sets it to `false`) on the next run to apply.
+- **Shared-glossary support.** `indexFile` / `cacheFile` accept absolute paths or paths outside the project root, so one `glossary.json` can be shared across multiple Astro sites in a monorepo. Documented in README.
+- **`--sl-glossary-*` CSS variables.** Tooltip colours, radii, shadow, and term-accent resolve through themeable vars (falling back to Starlight's `--sl-color-*` palette). Consumers with custom Starlight themes can retheme without overriding selectors.
+- **Improved accessibility on the tooltip popover.** Popover is now `role="dialog"` with `aria-modal="false"` and `aria-labelledby` pointing at the heading; term links carry `aria-haspopup="dialog"`, `aria-controls`, and `aria-expanded`. Documented a known keyboard-navigation limitation for future work.
+
+### Changed
+
+- `path.join(root, indexFile)` → `path.resolve(root, indexFile)` so absolute paths aren't clobbered.
+
 ## [1.1.0] — 2026-04-20
 
 ### Added

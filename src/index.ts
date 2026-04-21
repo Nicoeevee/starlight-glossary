@@ -58,22 +58,34 @@ export interface StarlightGlossaryOptions {
     /** Default: `true`. When false, no merge/rename based on Wikipedia
      *  redirects is performed at all. Cache holes are still filled. */
     enabled?: boolean;
-    /** Default: `false`. When true, the reconcile pass *reports* what it
-     *  would do (merges, renames, doc-ref rewrites) but does not modify
-     *  `glossary.json`, the cache, or any doc files. Useful for review
-     *  before opting in to auto-application. */
+    /** Default: `false` (except: forced to `true` on first build — when
+     *  `glossary-cache.json` does not yet exist — so a fresh install
+     *  doesn't silently rewrite user content). When true, the reconcile
+     *  pass *reports* what it would do (merges, renames, doc-ref
+     *  rewrites) but does not modify `glossary.json`, the cache, or any
+     *  doc files. */
     dryRun?: boolean;
     /** Default: `true`. When false, merges still happen (the source
      *  becomes a `mergedInto` stub) but `[label](glossary:old-slug)`
      *  references in `src/content/docs/` are NOT rewritten. Doc links
      *  continue to resolve via the merged-into stub at render time. */
     rewriteDocRefs?: boolean;
+    /** Default: `false`. When true, throws at end of build if reconcile
+     *  reported any SKIPs (Wikipedia redirects with substantial title
+     *  changes that weren't auto-adopted and weren't acknowledged via
+     *  `wikipediaRedirectAcknowledged`). Use in CI to force explicit
+     *  review of every divergence. */
+    failOnSkips?: boolean;
   };
   lint?: {
-    /** Default: `false`. When enabled, writes `.astro/glossary-lint.md`. */
+    /** Default: `true`. When enabled, writes `.astro/glossary-lint.md`. */
     enabled?: boolean;
     /** Default: `3`. */
     minOccurrences?: number;
+    /** Default: `false`. When true, throws at end of build if any
+     *  findings remain. Use in CI to enforce "no new untagged acronyms
+     *  or repeated proper nouns slip through". */
+    failOnFindings?: boolean;
   };
 }
 
@@ -92,10 +104,12 @@ export default function starlightGlossary(
     timeoutMs: options.wikipedia?.timeoutMs ?? 10_000,
   };
   const reconcileEnabled = options.reconcile?.enabled ?? true;
-  const reconcileDryRun = options.reconcile?.dryRun ?? false;
+  const reconcileDryRunExplicit = options.reconcile?.dryRun;
   const reconcileRewriteDocs = options.reconcile?.rewriteDocRefs ?? true;
+  const reconcileFailOnSkips = options.reconcile?.failOnSkips ?? false;
   const lintEnabled = options.lint?.enabled ?? true;
   const lintMinOccurrences = options.lint?.minOccurrences ?? 3;
+  const lintFailOnFindings = options.lint?.failOnFindings ?? false;
 
   return {
     name: "starlight-glossary",
@@ -243,6 +257,11 @@ export default function starlightGlossary(
               );
               await mkdir(path.dirname(reportPath), { recursive: true });
               await writeFile(reportPath, renderLintReport(findings), "utf8");
+              if (lintFailOnFindings) {
+                throw new Error(
+                  `lint.failOnFindings: ${findings.length} untagged term(s) require attention. See log above or .astro/glossary-lint.md.`,
+                );
+              }
             } else {
               logger.info(
                 "lint: every candidate term is already in the glossary",
@@ -265,17 +284,32 @@ export default function starlightGlossary(
               } = astroCtx;
 
               const root = fileURLToPath(astroConfig.root);
-              indexPath = path.join(root, indexFile);
-              cachePath = path.join(root, cacheFile);
+              // Use resolve (not join) so absolute paths work — consumers
+              // sometimes point indexFile/cacheFile at a shared location
+              // outside their project root (e.g. one glossary.json shared
+              // across several docs sites in a monorepo).
+              indexPath = path.resolve(root, indexFile);
+              cachePath = path.resolve(root, cacheFile);
 
               const context: ProjectContext = { routePrefix, wikipediaBase };
-              const { index, cache } = await loadGlossaryFiles(
+              const { index, cache, cacheExisted } = await loadGlossaryFiles(
                 indexPath,
                 cachePath,
                 logger,
               );
               indexRef = index;
               cacheRef = cache;
+
+              // Effective dry-run: user's explicit choice wins; otherwise
+              // we force-enable it on the very first build (no cache file
+              // yet) so a fresh install never silently rewrites doc files.
+              let reconcileDryRun = reconcileDryRunExplicit ?? false;
+              if (reconcileDryRunExplicit === undefined && !cacheExisted) {
+                reconcileDryRun = true;
+                logger.info(
+                  "no glossary-cache.json yet — running reconcile in dry-run mode for this build. Review the [dry-run] log lines and set reconcile.dryRun=false (or remove the option) on the next run to apply.",
+                );
+              }
 
               // Normalise aliases before anything sees them: drop underscored
               // and URL-encoded duplicates (leftovers from the Wikipedia-slug
@@ -351,6 +385,11 @@ export default function starlightGlossary(
                 if (report.skipped.length > 10) {
                   logger.info(
                     `  … and ${report.skipped.length - 10} more`,
+                  );
+                }
+                if (reconcileFailOnSkips) {
+                  throw new Error(
+                    `reconcile.failOnSkips: ${report.skipped.length} unresolved Wikipedia-redirect divergence(s). Review each entry and either update it or add wikipediaRedirectAcknowledged to silence.`,
                   );
                 }
               }
@@ -574,13 +613,18 @@ async function loadGlossaryFiles(
   indexPath: string,
   cachePath: string,
   logger: { warn: (msg: string) => void },
-): Promise<{ index: GlossaryIndex; cache: GlossaryCache }> {
+): Promise<{
+  index: GlossaryIndex;
+  cache: GlossaryCache;
+  cacheExisted: boolean;
+}> {
   let index: GlossaryIndex = { version: 1, terms: {} };
   let cache: GlossaryCache = {
     version: 1,
     fetchedAt: new Date(0).toISOString(),
     terms: {},
   };
+  let cacheExisted = false;
   // We distinguish three outcomes per file:
   //   1. file read + parsed + validated OK → use it
   //   2. file missing / unreadable → warn, start fresh
@@ -624,6 +668,7 @@ async function loadGlossaryFiles(
   if (cacheRaw !== null) {
     try {
       cache = validateGlossaryCache(cacheRaw, cachePath);
+      cacheExisted = true;
     } catch (err) {
       if (err instanceof GlossaryValidationError) {
         throw err;
@@ -632,7 +677,7 @@ async function loadGlossaryFiles(
     }
   }
 
-  return { index, cache };
+  return { index, cache, cacheExisted };
 }
 
 export { defaultSlugify };

@@ -158,12 +158,22 @@ starlightGlossary({
     // modifying glossary.json, glossary-cache.json, or any doc files.
     // The build log shows "[dry-run] would merge / would adopt …" so
     // you can audit before opting in.
+    //
+    // Default: false, EXCEPT on the very first build (when there's no
+    // glossary-cache.json yet), where dryRun is forced to true so a
+    // fresh install never silently rewrites doc files. Remove this
+    // option after that first build to resume auto-application.
     dryRun: false,
     // When false, merges still happen in glossary.json (the source
     // becomes a mergedInto stub) but [label](glossary:old-slug)
     // references in src/content/docs/ are NOT rewritten. Doc links
     // continue to resolve through the stub at render time.
     rewriteDocRefs: true,
+    // CI hook: throw if reconcile reported any SKIPs (Wikipedia
+    // redirects with substantial title changes not auto-adopted and
+    // not acknowledged via wikipediaRedirectAcknowledged). Forces
+    // explicit review of every divergence.
+    failOnSkips: false,
   },
 
   lint: {
@@ -173,6 +183,10 @@ starlightGlossary({
     enabled: true,
     // Minimum occurrences across all docs before a term is flagged.
     minOccurrences: 3,
+    // CI hook: throw if any findings remain at end of build. Use this
+    // to enforce "no new untagged acronyms/proper-nouns slip through
+    // without being added to glossary.json."
+    failOnFindings: false,
   },
 });
 ```
@@ -260,6 +274,23 @@ When the cached Wikipedia title for an entry differs from its `term`, the reconc
 
 If you want to *preview* what reconcile would do without applying any changes, set `reconcile: { dryRun: true }` in your plugin options. The build log shows `[dry-run] would merge / would adopt …` so you can audit before opting in.
 
+## Sharing a glossary across multiple sites
+
+Several docs sites in the same org? Put `glossary.json` and `glossary-cache.json` in a shared location and point every site at them:
+
+```js
+starlightGlossary({
+  indexFile: "../shared/glossary.json",         // relative to project root
+  cacheFile: "../shared/glossary-cache.json",
+  // or absolute:
+  // indexFile: "/Users/me/code/shared-glossary/glossary.json",
+});
+```
+
+Each site still gets its own `/glossary` index page and `/glossary/data.json` — they just share the underlying term list and Wikipedia cache. Discovery and reconcile run on whichever build first sees an unknown reference; subsequent sites pick up the updated file automatically. Commit the shared files to git like any other source.
+
+For CI, make sure the shared path is writable by the build. Atomic writes mean concurrent builds don't corrupt each other, but they do race (last-writer-wins for fresh discoveries). If that bothers you, fix `reconcile.dryRun: true` on every site except one "canonical" site.
+
 ## Hand-editing `glossary.json`
 
 Hand-editing is fully supported. The file is validated at startup with path-annotated error messages — a typo like `"caseSensitive": "yes"` produces:
@@ -279,6 +310,16 @@ Earlier versions of this plugin used a content collection (`src/content/glossary
 - Diffs at term level stay git-friendly without 200-file sprawl.
 - The plugin can write back new aliases and freshly-discovered entries atomically.
 - No `content.config.ts` boilerplate for consumers.
+
+## Accessibility
+
+- Term links are standard `<a>` elements — reachable via keyboard, screen-reader-announced with their visible label.
+- On focus (keyboard) the popover opens automatically; on blur it closes after a short delay.
+- The popover is declared as `role="dialog"` with `aria-modal="false"` and `aria-labelledby` pointing at the term heading, so screen readers announce "`<term>` dialog" when focus or hover triggers it.
+- Term links carry `aria-haspopup="dialog"`, `aria-controls`, and `aria-expanded` so assistive tech can signal that expandable content is available.
+- Native HTML Popover API handles inert/Escape/focus-return automatically when the platform supports it.
+
+**Known keyboard-only limitation:** the popover body (close button, Wikipedia link) isn't auto-focused on open, so keyboard users currently can't easily tab into the popover's own controls. You can still reach the underlying glossary page via the term's own `href` (`/glossary#slug`), and close via ESC. A future release will add opt-in focus management for fully keyboard-operable tooltips.
 
 ## Development
 
