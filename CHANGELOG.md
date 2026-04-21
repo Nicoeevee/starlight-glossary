@@ -4,12 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] — 2026-04-20
+
+### Changed
+
+- Replaced project-specific example terms (carried over from the original author's private docs corpus) with generic placeholders (`"Widget Factory"`) throughout tests, comments, and CHANGELOG entries. No behaviour change.
+
+### Added
+
+- New `lint.test.ts` cases confirming the lint collector correctly skips:
+  - `heading` subtrees (title-case headings no longer produce proper-noun noise)
+  - `code` blocks and `inlineCode` (technical tokens in code can't leak into lint findings)
+  - `link` text (nav/prose link labels don't count)
+
 ## [1.1.2] — 2026-04-20
 
 ### Fixed
 
 - **Autotag overlap resolution no longer silently favours case-sensitive aliases.** Previous versions collected case-sensitive matches first and dropped any overlapping case-insensitive match, even when the CI match was longer and more specific. Result: glossary with both `"IP"` (case-sensitive) and `"IP routing"` (case-insensitive) would tag the shorter `"IP"` inside text matching the full `"IP routing"` phrase. Now the rule is "earliest start wins; at a tie, longer match wins" — the phrase wins as users expect.
-- **Proper-noun lint over-counted sentence starters.** `"The Wave Clip"`, `"Each Wave Clip"`, `"A Wave Clip"` were each being counted as distinct proper nouns at occurrence 1 instead of all contributing to `"Wave Clip"`'s count. Leading stop-words (`The`, `A`, `An`, `This`, `Each`, `Every`, `Some`, `Many`, `Most`, `Any`, `Our`, `Their`, `Its`, `All`, `Few`, `Several`, …) are now stripped from the front of matches so the underlying noun is counted consistently.
+- **Proper-noun lint over-counted sentence starters.** Variants like `"The Widget Factory"`, `"Each Widget Factory"`, `"A Widget Factory"` were each being counted as distinct proper nouns at occurrence 1 instead of all contributing to `"Widget Factory"`'s count. Leading stop-words (`The`, `A`, `An`, `This`, `Each`, `Every`, `Some`, `Many`, `Most`, `Any`, `Our`, `Their`, `Its`, `All`, `Few`, `Several`, …) are now stripped from the front of matches so the underlying noun is counted consistently.
 
 ### Added
 

@@ -159,23 +159,23 @@ describe("lint.ignore (regex)", () => {
 describe("lint: proper noun detection", () => {
   it("flags capitalized two-word phrases repeated", () => {
     const findings = runLint([
-      "Wave Clip is a concept.",
-      "The Wave Clip connects them.",
-      "Each Wave Clip identifies.",
+      "Widget Factory is a concept.",
+      "The Widget Factory connects them.",
+      "Each Widget Factory identifies.",
     ]);
-    expect(findings.map((f) => f.term)).toContain("Wave Clip");
+    expect(findings.map((f) => f.term)).toContain("Widget Factory");
   });
 
   it("strips leading stop-words (The/Each/A/This/…) so variants count as one term", () => {
     // Without the strip, these 3 sentences produce 3 separate 1-count
-    // proper nouns ("Wave Clip", "The Wave Clip", "Each Wave Clip") and
-    // none reaches minOccurrences. With the strip, all 3 are "Wave Clip".
+    // proper nouns ("Widget Factory", "The Widget Factory", "Each Widget Factory") and
+    // none reaches minOccurrences. With the strip, all 3 are "Widget Factory".
     const findings = runLint([
-      "The Wave Clip is here.",
-      "This Wave Clip matters.",
-      "Each Wave Clip identifies.",
+      "The Widget Factory is here.",
+      "This Widget Factory matters.",
+      "Each Widget Factory identifies.",
     ]);
-    const waveClip = findings.find((f) => f.term === "Wave Clip");
+    const waveClip = findings.find((f) => f.term === "Widget Factory");
     expect(waveClip?.occurrences).toBe(3);
   });
 
@@ -199,6 +199,128 @@ describe("lint: proper noun detection", () => {
       { ignore: ["Total Message"] },
     );
     expect(findings.map((f) => f.term)).not.toContain("Total Message");
+  });
+});
+
+describe("lint: context filtering (headings, code, links)", () => {
+  it("does not count ALL-CAPS inside headings", () => {
+    // Heading text is title-case in many docs (e.g. "Install the FOO Plugin").
+    // Counting it produces noise; we should skip heading subtrees entirely.
+    const collector = createLintCollector({
+      enabled: true,
+      minOccurrences: 3,
+      data: emptyData(),
+    });
+    const t = collector.remarkPlugin();
+    const mkHeadingTree = (title: string, depth = 2) => ({
+      type: "root",
+      children: [
+        {
+          type: "heading",
+          depth,
+          children: [{ type: "text", value: title }],
+        },
+      ],
+    });
+    t(mkHeadingTree("Installing the NOPE Plugin"));
+    t(mkHeadingTree("Installing the NOPE Plugin"));
+    t(mkHeadingTree("Installing the NOPE Plugin"));
+    expect(collector.findings().map((f) => f.term)).not.toContain("NOPE");
+  });
+
+  it("does not count capitalized words inside headings (proper-noun side)", () => {
+    const collector = createLintCollector({
+      enabled: true,
+      minOccurrences: 2,
+      data: emptyData(),
+    });
+    const t = collector.remarkPlugin();
+    const mkHeadingTree = (title: string) => ({
+      type: "root",
+      children: [
+        {
+          type: "heading",
+          depth: 2,
+          children: [{ type: "text", value: title }],
+        },
+      ],
+    });
+    t(mkHeadingTree("Fancy Title Case"));
+    t(mkHeadingTree("Fancy Title Case"));
+    expect(collector.findings().map((f) => f.term)).not.toContain(
+      "Fancy Title Case",
+    );
+  });
+
+  it("does not count terms inside code blocks", () => {
+    const collector = createLintCollector({
+      enabled: true,
+      minOccurrences: 2,
+      data: emptyData(),
+    });
+    const t = collector.remarkPlugin();
+    const mkCodeTree = (value: string) => ({
+      type: "root",
+      children: [{ type: "code", lang: "bash", value }],
+    });
+    t(mkCodeTree("echo NOPE && NOPE > /tmp/x"));
+    t(mkCodeTree("echo NOPE && NOPE > /tmp/x"));
+    expect(collector.findings().map((f) => f.term)).not.toContain("NOPE");
+  });
+
+  it("does not count terms inside inline code", () => {
+    const collector = createLintCollector({
+      enabled: true,
+      minOccurrences: 2,
+      data: emptyData(),
+    });
+    const t = collector.remarkPlugin();
+    // paragraph with inlineCode child whose value contains NOPE
+    const mkTree = () => ({
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            { type: "text", value: "run " },
+            { type: "inlineCode", value: "NOPE" },
+            { type: "text", value: " and then " },
+            { type: "inlineCode", value: "NOPE" },
+          ],
+        },
+      ],
+    });
+    t(mkTree());
+    t(mkTree());
+    t(mkTree());
+    expect(collector.findings().map((f) => f.term)).not.toContain("NOPE");
+  });
+
+  it("does not count link text", () => {
+    const collector = createLintCollector({
+      enabled: true,
+      minOccurrences: 2,
+      data: emptyData(),
+    });
+    const t = collector.remarkPlugin();
+    const mkTree = () => ({
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "link",
+              url: "/foo",
+              children: [{ type: "text", value: "NOPE" }],
+            },
+          ],
+        },
+      ],
+    });
+    t(mkTree());
+    t(mkTree());
+    expect(collector.findings().map((f) => f.term)).not.toContain("NOPE");
   });
 });
 

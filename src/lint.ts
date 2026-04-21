@@ -120,9 +120,9 @@ export function createLintCollector(opts: LintOptions) {
           }
           for (const m of text.matchAll(/\b[A-Z][a-z]+(?:\s[A-Z][a-z]+){1,3}\b/g)) {
             // Strip leading capitalized "stop words" (sentence starters
-            // and demonstratives) so "The Wave Clip" is counted as
-            // "Wave Clip" — otherwise we'd see N variants like
-            // "The Wave Clip", "Each Wave Clip", "A Wave Clip" each at
+            // and demonstratives) so "The Widget Factory" is counted as
+            // "Widget Factory" — otherwise we'd see N variants like
+            // "The Widget Factory", "Each Widget Factory", "A Widget Factory" each at
             // count 1 and never reach minOccurrences.
             const term = stripLeadingStopWords(m[0]);
             if (!term) continue;
