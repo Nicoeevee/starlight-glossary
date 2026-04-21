@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-04-20
+
+### Added
+
+- **`lint.autoDiscover`** option (default: `false`). When true, every lint finding is submitted to the Wikipedia discovery pipeline at end of build. Unambiguous hits get auto-added to `glossary.json` + `glossary-cache.json` with the Wikipedia title, description, and extract. Disambiguation pages, 404s, and fetch errors are logged with a clear reason and the term stays in the lint report. Closes the loop: write prose → build → glossary grows itself.
+- **Structured lint report.** `.astro/glossary-lint.md` now has three sections when `autoDiscover` is enabled:
+  - **Auto-added this build** — a table with the slug, one-liner description, and clickable Wikipedia URL so the user can audit each auto-add
+  - **Auto-discover failed** — terms that hit a disambiguation page, 404, or fetch error, with the reason
+  - **Still untagged candidates** — the usual heuristic findings
+
+### Reported match log
+
+When a term auto-adds successfully, the build log prints:
+```
+lint.autoDiscover: auto-added 5 term(s):
+  · Secure Shell — Cryptographic network protocol
+    https://en.wikipedia.org/wiki/Secure_Shell
+  · …
+```
+
+so the match can be sanity-checked at a glance without opening the report file.
+
 ## [1.1.3] — 2026-04-20
 
 ### Changed

@@ -191,6 +191,14 @@ starlightGlossary({
       "Associated Data",     // already covered by the AAD entry
       /^v\d+$/,              // version tokens like "V1", "V2"
     ],
+    // Feed every lint finding into the Wikipedia discovery pipeline.
+    // Unambiguous hits auto-add to glossary.json + cache; disambiguation
+    // pages, 404s, and fetch errors fall through to the lint report
+    // with an explanation. Closes the loop: write prose → build →
+    // glossary grows itself. Review each auto-add before committing
+    // — the build log prints the matched Wikipedia title + one-liner +
+    // full URL for every success.
+    autoDiscover: false,
     // CI hook: throw if any findings remain at end of build. Use this
     // to enforce "no new untagged acronyms/proper-nouns slip through
     // without being added to glossary.json."

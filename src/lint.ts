@@ -200,22 +200,94 @@ function stripLeadingStopWords(phrase: string): string {
   return parts.slice(i).join(" ");
 }
 
-export function renderLintReport(findings: LintFinding[]): string {
-  if (findings.length === 0) {
-    return "# Glossary lint\n\nNo suggestions — every candidate term is already tagged.\n";
+export interface AutoDiscoveredTerm {
+  slug: string;
+  title: string;
+  description: string;
+  url: string;
+}
+
+export interface RenderLintReportExtras {
+  /** Terms auto-added via Wikipedia in this build (when lint.autoDiscover
+   *  is enabled). Rendered as a separate section so the user can audit
+   *  what the plugin committed on their behalf. */
+  autoDiscovered?: AutoDiscoveredTerm[];
+  /** Terms submitted to auto-discover but rejected (disambiguation,
+   *  404, or fetch error). Kept separately so the user can either add
+   *  them manually with a disambiguated article hint or suppress them
+   *  via `lint.ignore`. */
+  autoDiscoverFailed?: Array<{ term: string; reason: string }>;
+}
+
+export function renderLintReport(
+  findings: LintFinding[],
+  extras: RenderLintReportExtras = {},
+): string {
+  const sections: string[] = [];
+
+  if (extras.autoDiscovered && extras.autoDiscovered.length > 0) {
+    sections.push(
+      "# Auto-added this build",
+      "",
+      "These terms were detected by lint and resolved to an unambiguous",
+      "Wikipedia article, so they were added to `glossary.json` + cache.",
+      "Review each one to confirm the match is what you intended — if not,",
+      "edit the entry in `glossary.json` or revert the commit.",
+      "",
+      "| Term | One-liner | Wikipedia |",
+      "|---|---|---|",
+    );
+    for (const t of extras.autoDiscovered) {
+      const link = t.url ? `[${t.title}](${t.url})` : t.title;
+      const desc = t.description.replace(/\|/g, "\\|");
+      sections.push(`| \`${t.slug}\` | ${desc || "—"} | ${link} |`);
+    }
+    sections.push("");
   }
-  const lines = [
-    "# Glossary lint — untagged candidates",
+
+  if (extras.autoDiscoverFailed && extras.autoDiscoverFailed.length > 0) {
+    sections.push(
+      "# Auto-discover failed",
+      "",
+      "These terms were detected by lint but Wikipedia couldn't resolve",
+      "them cleanly. Add them manually (with an explicit article hint via",
+      "`glossary:Article_Name` in your docs), or add them to `lint.ignore`",
+      "if they aren't glossary candidates.",
+      "",
+      "| Term | Reason |",
+      "|---|---|",
+    );
+    for (const f of extras.autoDiscoverFailed) {
+      sections.push(`| \`${f.term}\` | ${f.reason} |`);
+    }
+    sections.push("");
+  }
+
+  if (findings.length === 0) {
+    if (sections.length === 0) {
+      return "# Glossary lint\n\nNo suggestions — every candidate term is already tagged.\n";
+    }
+    sections.push(
+      "# Still untagged",
+      "",
+      "No remaining untagged candidates.",
+      "",
+    );
+    return sections.join("\n");
+  }
+
+  sections.push(
+    "# Still untagged candidates",
     "",
     "Terms that appear frequently but aren't in the glossary. Consider adding",
     "them to `glossary.json`, or wrapping first mentions in `[x](glossary:)`.",
     "",
     "| Term | Occurrences | Kind |",
     "|---|---|---|",
-  ];
+  );
   for (const f of findings) {
-    lines.push(`| \`${f.term}\` | ${f.occurrences} | ${f.kind} |`);
+    sections.push(`| \`${f.term}\` | ${f.occurrences} | ${f.kind} |`);
   }
-  lines.push("");
-  return lines.join("\n");
+  sections.push("");
+  return sections.join("\n");
 }

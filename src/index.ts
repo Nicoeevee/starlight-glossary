@@ -88,6 +88,13 @@ export interface StarlightGlossaryOptions {
      *  glossary candidates but aren't (`US`, `CD`, `ID`, …) or for
      *  generic proper-noun phrases that would otherwise be noisy. */
     ignore?: (string | RegExp)[];
+    /** Default: `false`. When true, every lint finding is submitted to
+     *  the Wikipedia discovery pipeline at end of build. Unambiguous hits
+     *  get auto-added to `glossary.json` + cache with the Wikipedia
+     *  title, description, and extract. Disambiguation pages, 404s, and
+     *  fetch errors are logged and the term stays in the lint report.
+     *  Closes the loop: write prose → build → glossary grows itself. */
+    autoDiscover?: boolean;
     /** Default: `false`. When true, throws at end of build if any
      *  findings remain. Use in CI to enforce "no new untagged acronyms
      *  or repeated proper nouns slip through". */
@@ -116,6 +123,7 @@ export default function starlightGlossary(
   const lintEnabled = options.lint?.enabled ?? true;
   const lintMinOccurrences = options.lint?.minOccurrences ?? 3;
   const lintIgnore = options.lint?.ignore ?? [];
+  const lintAutoDiscover = options.lint?.autoDiscover ?? false;
   const lintFailOnFindings = options.lint?.failOnFindings ?? false;
 
   return {
@@ -237,6 +245,104 @@ export default function starlightGlossary(
             }
           }
 
+          let autoDiscovered: string[] = [];
+          let autoDiscoverFailed: Array<{ term: string; reason: string }> = [];
+          let remainingFindings = lintCollector?.findings() ?? [];
+
+          // Auto-discover lint findings via Wikipedia when requested.
+          // Each finding is submitted to discoverMissingTerms; successes
+          // are removed from the remaining lint list and reported with
+          // their Wikipedia title/description/URL so the user can audit.
+          // Failures (disambiguation, 404, fetch errors) stay in the
+          // lint report with a reason.
+          if (
+            lintEnabled &&
+            lintCollector &&
+            lintAutoDiscover &&
+            remainingFindings.length > 0 &&
+            wikipedia.enabled !== false
+          ) {
+            const slugify = defaultSlugify;
+            const unresolved: UnresolvedReference[] = remainingFindings.map(
+              (f) => ({
+                slug: slugify(f.term),
+                label: f.term,
+                // Use the term itself as the Wikipedia article hint.
+                // Acronyms like "SSH" are resolved via Wikipedia redirects
+                // ("Secure Shell"); proper nouns usually match directly.
+                article: f.term,
+                locations: [`lint: ${f.occurrences}× (${f.kind})`],
+              }),
+            );
+            logger.info(
+              `lint.autoDiscover: submitting ${unresolved.length} finding(s) to Wikipedia…`,
+            );
+            const before = new Set(Object.keys(indexRef.terms));
+            const report = await discoverMissingTerms(
+              unresolved,
+              indexRef,
+              cacheRef,
+              logger,
+              wikipedia,
+            );
+            if (report.added.length > 0) mutated = true;
+            autoDiscovered = report.added;
+            const addedSet = new Set(report.added);
+            // Build failure reasons so the lint report can show why
+            // each term wasn't auto-added.
+            for (const slug of report.errored) {
+              const label =
+                unresolved.find((u) => u.slug === slug)?.label ?? slug;
+              autoDiscoverFailed.push({ term: label, reason: "fetch failed" });
+            }
+            for (const slug of report.missing) {
+              const label =
+                unresolved.find((u) => u.slug === slug)?.label ?? slug;
+              autoDiscoverFailed.push({
+                term: label,
+                reason: "no matching Wikipedia article",
+              });
+            }
+            for (const slug of report.ambiguous) {
+              const label =
+                unresolved.find((u) => u.slug === slug)?.label ?? slug;
+              autoDiscoverFailed.push({
+                term: label,
+                reason: "Wikipedia disambiguation page",
+              });
+            }
+            // Print a per-term summary with the info users need to
+            // confirm the match at a glance.
+            if (report.added.length > 0) {
+              logger.info(
+                `lint.autoDiscover: auto-added ${report.added.length} term(s):`,
+              );
+              for (const slug of report.added) {
+                if (before.has(slug)) continue;
+                const entry = indexRef.terms[slug];
+                const cached = cacheRef.terms[slug];
+                const title = cached?.title ?? entry?.term ?? slug;
+                const desc = cached?.description ?? "";
+                const url = cached?.url ?? "";
+                logger.info(`  · ${title}${desc ? " — " + desc : ""}`);
+                if (url) logger.info(`    ${url}`);
+              }
+            }
+            if (autoDiscoverFailed.length > 0) {
+              logger.info(
+                `lint.autoDiscover: ${autoDiscoverFailed.length} term(s) could not be auto-added:`,
+              );
+              for (const f of autoDiscoverFailed) {
+                logger.info(`  · "${f.term}" — ${f.reason}`);
+              }
+            }
+            // Strip auto-added terms from the remaining findings so the
+            // lint report doesn't list them as still-untagged.
+            remainingFindings = remainingFindings.filter(
+              (f) => !addedSet.has(slugify(f.term)),
+            );
+          }
+
           if (mutated) {
             cacheRef.fetchedAt = new Date().toISOString();
             await writeJsonAtomic(indexPath, indexRef);
@@ -245,17 +351,16 @@ export default function starlightGlossary(
           }
 
           if (lintEnabled && lintCollector) {
-            const findings = lintCollector.findings();
-            if (findings.length > 0) {
+            if (remainingFindings.length > 0) {
               logger.info(
-                `lint: ${findings.length} term(s) appear ≥${lintMinOccurrences}× without a glossary entry:`,
+                `lint: ${remainingFindings.length} term(s) appear ≥${lintMinOccurrences}× without a glossary entry:`,
               );
-              for (const f of findings.slice(0, 20)) {
+              for (const f of remainingFindings.slice(0, 20)) {
                 logger.info(`  · "${f.term}" (${f.occurrences}× · ${f.kind})`);
               }
-              if (findings.length > 20) {
+              if (remainingFindings.length > 20) {
                 logger.info(
-                  `  … and ${findings.length - 20} more (see .astro/glossary-lint.md)`,
+                  `  … and ${remainingFindings.length - 20} more (see .astro/glossary-lint.md)`,
                 );
               }
               const reportPath = path.join(
@@ -263,10 +368,25 @@ export default function starlightGlossary(
                 ".astro/glossary-lint.md",
               );
               await mkdir(path.dirname(reportPath), { recursive: true });
-              await writeFile(reportPath, renderLintReport(findings), "utf8");
+              await writeFile(
+                reportPath,
+                renderLintReport(remainingFindings, {
+                  autoDiscovered: autoDiscovered.map((slug) => {
+                    const cached = cacheRef.terms[slug];
+                    return {
+                      slug,
+                      title: cached?.title ?? slug,
+                      description: cached?.description ?? "",
+                      url: cached?.url ?? "",
+                    };
+                  }),
+                  autoDiscoverFailed,
+                }),
+                "utf8",
+              );
               if (lintFailOnFindings) {
                 throw new Error(
-                  `lint.failOnFindings: ${findings.length} untagged term(s) require attention. See log above or .astro/glossary-lint.md.`,
+                  `lint.failOnFindings: ${remainingFindings.length} untagged term(s) require attention. See log above or .astro/glossary-lint.md.`,
                 );
               }
             } else {
