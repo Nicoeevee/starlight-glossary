@@ -25,6 +25,7 @@ import {
 import { reconcileWikipediaRedirects } from "./reconcile.js";
 import { rewriteDocRefs } from "./rewrite-refs.js";
 import { remarkAutoTag, type AutoTagMode } from "./autotag.js";
+import { buildLintContext } from "./context.js";
 import { createLintCollector, renderLintReport } from "./lint.js";
 import { writeJsonAtomic } from "./persist.js";
 import {
@@ -481,6 +482,34 @@ export default function starlightGlossary(
                 }),
                 "utf8",
               );
+
+              // Emit an LLM-ready context dump alongside the human
+              // report. The dump includes per-finding surrounding text
+              // and a summary of the existing glossary, so an LLM
+              // (Claude, GPT, local, whatever) can propose a
+              // resolutions file that `apply.mjs` applies.
+              const contextPath = path.join(
+                path.dirname(indexPath),
+                ".astro/glossary-lint-context.json",
+              );
+              await writeFile(
+                contextPath,
+                JSON.stringify(
+                  buildLintContext({
+                    findings: remainingFindings,
+                    index: indexRef,
+                    autoDiscoverFailed: autoDiscoverFailed.map((f) => ({
+                      term: f.term,
+                      reason: f.reason,
+                    })),
+                    slugify: defaultSlugify,
+                  }),
+                  null,
+                  2,
+                ),
+                "utf8",
+              );
+
               if (lintFailOnFindings) {
                 throw new Error(
                   `lint.failOnFindings: ${remainingFindings.length} untagged term(s) require attention. See log above or .astro/glossary-lint.md.`,

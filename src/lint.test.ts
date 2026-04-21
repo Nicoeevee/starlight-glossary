@@ -327,12 +327,19 @@ describe("lint: context filtering (headings, code, links)", () => {
 describe("renderLintReport", () => {
   it("produces a nice table when there are findings", () => {
     const report = renderLintReport([
-      { term: "FOO", occurrences: 5, kind: "acronym", sample: "sample text" },
+      {
+        term: "FOO",
+        occurrences: 5,
+        kind: "acronym",
+        sample: "sample text",
+        samples: [],
+      },
       {
         term: "Bar Baz",
         occurrences: 3,
         kind: "proper-noun",
         sample: "…",
+        samples: [],
       },
     ]);
     expect(report).toContain("`FOO`");

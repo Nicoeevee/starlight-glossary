@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-04-21
+
+### Added
+
+- **LLM-assisted glossary curation workflow** (plugin stays LLM-agnostic):
+  - `.astro/glossary-lint-context.json` — structured context dump emitted on every build whenever lint has findings. Contains a summary of every existing glossary entry (corpus), and per-finding: kind, occurrences, proposed slug, up to 5 sample excerpts (file + centred ~240-char snippet), and Wikipedia auto-discover outcome if attempted. LLMs read this to produce a resolutions file.
+  - `starlight-glossary-apply` — CLI binary that applies a resolutions file to `glossary.json`. Four actions: `add_alias` (push alias onto existing entry), `create` (insert new entry with defaults filled in), `ignore` (print a reminder to add the term to `lint.ignore`; does not mutate config), `skip` (no-op). Writes are atomic. Supports `--dry-run` to preview without writing.
+  - Auto-redirect for `add_alias` on merged stubs: when the target slug has `mergedInto`, the alias lands on the canonical entry with a warning.
+  - Guard rails: unknown slug, already-existing alias, duplicate slug on `create`, and unknown action all warn (in dry-run and real runs) without corrupting state.
+- **Per-finding occurrence capture** in lint. Each finding now carries up to 5 `{file, excerpt}` samples (previously only the first 100 chars of the first match). This is the raw material for the context dump; also available via the `LintFinding.samples` field for programmatic consumers.
+- 10 new `apply.test.ts` integration tests spawning the real CLI in a tmp dir to validate every action + error path.
+
+### Workflow (documented in README "LLM-assisted glossary curation"):
+
+```
+pnpm build
+claude "resolve .astro/glossary-lint-context.json" > resolutions.json
+pnpm exec starlight-glossary-apply resolutions.json --dry-run
+pnpm exec starlight-glossary-apply resolutions.json
+```
+
 ## [1.3.0] — 2026-04-20
 
 ### Fixed

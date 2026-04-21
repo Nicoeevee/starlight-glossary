@@ -19,16 +19,61 @@ export interface LintOptions {
   ignore?: (string | RegExp)[];
 }
 
+export interface LintOccurrence {
+  /** Source file path (relative to project root when available). */
+  file: string;
+  /** ~200-char window centred on the match; used as LLM input for
+   *  deciding what the term refers to in this project's domain. */
+  excerpt: string;
+}
+
 export interface LintFinding {
   term: string;
   occurrences: number;
   kind: "acronym" | "proper-noun";
+  /** First-seen excerpt — kept for backwards compat with renderLintReport. */
   sample: string;
+  /** Up to N sample occurrences with file + surrounding text, collected
+   *  for the LLM context dump. `[]` when no occurrences were captured
+   *  (e.g. because the match was in a file with no path info). */
+  samples: LintOccurrence[];
 }
 
 interface LintCounter {
   count: number;
   sample: string;
+  samples: LintOccurrence[];
+}
+
+/** How many per-term occurrences to capture (file + excerpt) for the
+ *  LLM context dump. Higher values give LLMs more signal but bloat the
+ *  context file. 5 feels like a reasonable sweet spot. */
+const MAX_SAMPLES_PER_TERM = 5;
+
+/** Width of the excerpt window on each side of a match. Wide enough to
+ *  span a full sentence; narrow enough to keep the context file small. */
+const EXCERPT_HALF_WIDTH = 120;
+
+function captureOccurrence(
+  counter: LintCounter,
+  file: string | undefined,
+  text: string,
+  matchIndex: number,
+  matchLength: number,
+): void {
+  counter.count++;
+  if (counter.samples.length >= MAX_SAMPLES_PER_TERM) return;
+  const start = Math.max(0, matchIndex - EXCERPT_HALF_WIDTH);
+  const end = Math.min(
+    text.length,
+    matchIndex + matchLength + EXCERPT_HALF_WIDTH,
+  );
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < text.length ? "…" : "";
+  counter.samples.push({
+    file: file ?? "(unknown)",
+    excerpt: prefix + text.slice(start, end) + suffix,
+  });
 }
 
 // Baseline list of ALL-CAPS words that look like acronyms but almost
@@ -89,8 +134,12 @@ export function createLintCollector(opts: LintOptions) {
   // transformer. The closure captures the shared counters so state
   // accumulates across all files in the build.
   function remarkPlugin() {
-    return function transformer(tree: unknown) {
+    return function transformer(tree: unknown, file?: unknown) {
       if (!opts.enabled) return;
+      // Pull the source file path from the vfile (Astro sets this on the
+      // VFile it hands to each remark pass). We normalise to a path
+      // relative to cwd so excerpts in the context file are portable.
+      const filePath = extractFilePath(file);
       visit(
         tree as Parameters<typeof visit>[0],
         (node: unknown) => {
@@ -114,9 +163,16 @@ export function createLintCollector(opts: LintOptions) {
             // emphasis: NOT, OK, YES, NO, ONLY, ETC, etc.
             if (COMMON_CAPS_WORDS.has(term)) continue;
             if (isIgnored(term)) continue;
-            const prev = acronymCounts.get(term);
-            if (prev) prev.count++;
-            else acronymCounts.set(term, { count: 1, sample: text.slice(0, 100) });
+            let counter = acronymCounts.get(term);
+            if (!counter) {
+              counter = {
+                count: 0,
+                sample: text.slice(0, 100),
+                samples: [],
+              };
+              acronymCounts.set(term, counter);
+            }
+            captureOccurrence(counter, filePath, text, m.index ?? 0, term.length);
           }
           for (const m of text.matchAll(/\b[A-Z][a-z]+(?:\s[A-Z][a-z]+){1,3}\b/g)) {
             // Strip leading capitalized "stop words" (sentence starters
@@ -133,27 +189,67 @@ export function createLintCollector(opts: LintOptions) {
             if (!term.includes(" ")) continue;
             if (isKnownCi(term)) continue;
             if (isIgnored(term)) continue;
-            const prev = nounCounts.get(term);
-            if (prev) prev.count++;
-            else nounCounts.set(term, { count: 1, sample: text.slice(0, 100) });
+            let counter = nounCounts.get(term);
+            if (!counter) {
+              counter = {
+                count: 0,
+                sample: text.slice(0, 100),
+                samples: [],
+              };
+              nounCounts.set(term, counter);
+            }
+            // Recompute the match offset in the original text (we may
+            // have stripped leading stop-words so m[0] is longer than
+            // `term`). Find the stripped form inside the match.
+            const offsetInMatch = m[0].length - term.length;
+            const absIndex = (m.index ?? 0) + offsetInMatch;
+            captureOccurrence(counter, filePath, text, absIndex, term.length);
           }
         },
       );
     };
   }
 
+  function extractFilePath(file: unknown): string | undefined {
+    if (!file || typeof file !== "object") return undefined;
+    const f = file as { path?: string; history?: string[] };
+    const raw = f.path ?? f.history?.[f.history.length - 1];
+    if (!raw) return undefined;
+    // Normalise to a cwd-relative path when possible; fall back to the
+    // raw absolute path if we can't compute one cleanly.
+    try {
+      const cwd = process.cwd();
+      if (raw.startsWith(cwd + "/")) return raw.slice(cwd.length + 1);
+    } catch {
+      /* no cwd available (edge cases in sandboxes) — fall through */
+    }
+    return raw;
+  }
+
   return {
     remarkPlugin,
     findings(): LintFinding[] {
       const out: LintFinding[] = [];
-      for (const [term, { count, sample }] of acronymCounts) {
+      for (const [term, { count, sample, samples }] of acronymCounts) {
         if (count >= opts.minOccurrences) {
-          out.push({ term, occurrences: count, kind: "acronym", sample });
+          out.push({
+            term,
+            occurrences: count,
+            kind: "acronym",
+            sample,
+            samples,
+          });
         }
       }
-      for (const [term, { count, sample }] of nounCounts) {
+      for (const [term, { count, sample, samples }] of nounCounts) {
         if (count >= opts.minOccurrences) {
-          out.push({ term, occurrences: count, kind: "proper-noun", sample });
+          out.push({
+            term,
+            occurrences: count,
+            kind: "proper-noun",
+            sample,
+            samples,
+          });
         }
       }
       out.sort((a, b) => b.occurrences - a.occurrences);

@@ -296,6 +296,84 @@ The plugin ships these CSS classes; override them in your own stylesheet if you 
 | `.sl-glossary-term[data-glossary-read]` | Muted — user has hovered ≥1.5s (localStorage) |
 | `.sl-glossary-popover` | The tooltip element itself |
 
+## LLM-assisted glossary curation
+
+When lint flags terms that aren't in `glossary.json` and auto-discover fails to resolve them cleanly (disambiguation pages, 404s, project-specific phrases), the plugin emits `.astro/glossary-lint-context.json` — a structured context dump ready to feed to any LLM (Claude, GPT, local model, etc.) for disambiguation help.
+
+### The workflow
+
+```sh
+# 1. Build your site. Plugin emits the context dump alongside the human report.
+pnpm build
+
+# 2. Feed context to an LLM. It proposes a resolutions file describing
+#    how to resolve each finding (add alias, create entry, ignore, skip).
+claude "resolve the findings in .astro/glossary-lint-context.json. \
+  Use the existing corpus to decide whether each term is an alias for \
+  an existing entry, a new entry with a specific Wikipedia article, a \
+  stub with a custom definition, or noise to add to lint.ignore. \
+  Output resolutions.json matching the shape described in the file's \
+  description field." > resolutions.json
+
+# 3. Preview what apply would do (always safe — writes nothing).
+pnpm exec starlight-glossary-apply resolutions.json --dry-run
+
+# 4. Apply for real. glossary.json gets mutated atomically.
+pnpm exec starlight-glossary-apply resolutions.json
+
+# 5. Next build picks up the new entries + aliases. Review the diff and commit.
+git diff glossary.json
+pnpm build
+```
+
+### Context dump shape (`.astro/glossary-lint-context.json`)
+
+The file contains:
+
+- **`corpus`** — a summary of every existing glossary entry (slug, term, aliases, relations). The LLM reads this to decide whether a finding is probably an alias for something existing.
+- **`findings`** — one entry per unresolved lint candidate, with:
+  - `term`, `kind` (`acronym` / `proper-noun`), `occurrences`
+  - `proposedSlug` (kebab-case of the term — the LLM can override)
+  - `contexts` — up to 5 sample occurrences with file path + ~240-char excerpt centred on the match, so the LLM can ground its decision in domain context
+  - `wikipediaOutcome` (when auto-discover attempted this term): what Wikipedia returned (disambiguation / missing / fetch error) and what query was tried
+
+### Resolutions file shape
+
+The LLM's output. Each entry chooses **one** action:
+
+| Action | What it does | Required fields |
+|---|---|---|
+| `add_alias` | Push `alias` onto the `aliases` array of an existing entry | `targetSlug`, `alias` |
+| `create` | Insert a new glossary entry at `slug` using `entry` (defaults filled in) | `slug`, `entry` |
+| `ignore` | Print a reminder to add the term to `lint.ignore` in your config — does **not** mutate `glossary.json` or your config file | `note` (optional) |
+| `skip` | No-op; finding stays in future lint runs | — |
+
+Example:
+
+```json
+{
+  "version": 1,
+  "resolutions": [
+    { "term": "TLS", "action": "add_alias",
+      "targetSlug": "transport-layer-security", "alias": "TLS" },
+    { "term": "OSI", "action": "create", "slug": "osi-model",
+      "entry": {
+        "term": "OSI model",
+        "aliases": ["OSI", "OSI model"],
+        "wikipedia": "OSI_model",
+        "caseSensitive": false
+      } },
+    { "term": "End Reliability", "action": "ignore",
+      "note": "project-internal, not a glossary term" },
+    { "term": "Counter Mode", "action": "skip" }
+  ]
+}
+```
+
+### Why not embed an LLM in the plugin?
+
+Because it would force every consumer of the plugin to pay (money, latency, privacy of docs content sent to a vendor, and lock-in to one LLM). The context-dump + apply-command split keeps the plugin **deterministic, offline-friendly, and LLM-agnostic**. Bring your own intelligence — the plugin just packages the data and applies the decision.
+
 ## Working with reconcile (Wikipedia redirects)
 
 When the cached Wikipedia title for an entry differs from its `term`, the reconcile pass tries to resolve the divergence safely:
