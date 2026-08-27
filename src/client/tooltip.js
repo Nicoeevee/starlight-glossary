@@ -22,6 +22,10 @@ const READ_THRESHOLD_MS = 1500; // tooltip must be visible this long to count as
 function getDataUrl() {
   return `${globalThis.__STARLIGHT_GLOSSARY_DATA_PREFIX || "/glossary"}/data.json`;
 }
+
+function getGlossaryUrl(slug) {
+  return `${globalThis.__STARLIGHT_GLOSSARY_DATA_PREFIX || "/glossary"}#${encodeURIComponent(slug)}`;
+}
 const READ_STORAGE_KEY = "sl-glossary-read";
 
 /** @type {Promise<Record<string, GlossaryEntry>> | null} */
@@ -209,7 +213,7 @@ async function showFor(term) {
     taglineEl.textContent = entry.description || "";
     taglineEl.style.display = entry.description ? "" : "none";
     bodyEl.innerHTML = entry.html;
-    const parts = [`<a href="/glossary#${encodeURIComponent(slug)}">Read more →</a>`];
+    const parts = [`<a href="${getGlossaryUrl(slug)}">Read more →</a>`];
     // If this specific reference carries a fragment, build a fragment-
     // aware Wikipedia URL on top of the entry's article URL; otherwise
     // use the entry's own URL (which may already be a fragment).
@@ -235,7 +239,7 @@ async function showFor(term) {
     termEl.textContent = prettifyTerm(slug);
     taglineEl.style.display = "none";
     bodyEl.innerHTML = "<p><em>No definition available.</em></p>";
-    footerEl.innerHTML = `<a href="/glossary#${slug}">Open glossary →</a>`;
+    footerEl.innerHTML = `<a href="${getGlossaryUrl(slug)}">Open glossary →</a>`;
   }
 
   activeTerm = term;
