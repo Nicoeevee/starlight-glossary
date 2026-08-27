@@ -19,7 +19,9 @@
 const SHOW_DELAY = 150;
 const HIDE_DELAY = 250;
 const READ_THRESHOLD_MS = 1500; // tooltip must be visible this long to count as "read"
-const DATA_URL = `${globalThis.__STARLIGHT_GLOSSARY_DATA_PREFIX || "/glossary"}/data.json`;
+function getDataUrl() {
+  return `${globalThis.__STARLIGHT_GLOSSARY_DATA_PREFIX || "/glossary"}/data.json`;
+}
 const READ_STORAGE_KEY = "sl-glossary-read";
 
 /** @type {Promise<Record<string, GlossaryEntry>> | null} */
@@ -75,7 +77,7 @@ function loadData() {
     // `cache: "no-cache"` still uses the HTTP cache but always
     // validates with the server (If-None-Match). Prevents a previously
     // cached empty/partial response from blocking tooltip contents.
-    dataPromise = fetch(DATA_URL, {
+    dataPromise = fetch(getDataUrl(), {
       credentials: "same-origin",
       cache: "no-cache",
     })
