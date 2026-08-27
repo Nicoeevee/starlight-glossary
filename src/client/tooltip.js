@@ -19,7 +19,8 @@
 const SHOW_DELAY = 150;
 const HIDE_DELAY = 250;
 const READ_THRESHOLD_MS = 1500; // tooltip must be visible this long to count as "read"
-const DATA_URL = "/glossary/data.json";
+const DATA_URL =
+  new URL(import.meta.url).searchParams.get("dataUrl") || "/glossary/data.json";
 const READ_STORAGE_KEY = "sl-glossary-read";
 
 /** @type {Promise<Record<string, GlossaryEntry>> | null} */

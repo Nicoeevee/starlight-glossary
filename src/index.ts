@@ -814,7 +814,7 @@ export default function starlightGlossary(
               });
               injectScript(
                 "page",
-                `import ${JSON.stringify(path.join(here, "client/tooltip.js"))};`,
+                `import ${JSON.stringify(`${path.join(here, "client/tooltip.js")}?dataUrl=${encodeURIComponent(`${routePrefix}/data.json`)}`)};`,
               );
             },
             "astro:build:done": async () => {
